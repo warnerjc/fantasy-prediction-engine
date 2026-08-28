@@ -1,0 +1,76 @@
+{
+  "league_id": "236625",
+  "platform": "yahoo",
+  "league_name": "keepitcrooked",
+  "league_url": "https://football.fantasysports.yahoo.com/league/keepitcrooked",
+  "draft_type": "offline",
+  "draft_date": null,
+  "scoring_type": "head_to_head",
+  "teams": 10,
+  "fractional_points": true,
+  "negative_points": true,
+  "_fractional_points_note": "Yahoo settings page confirms fractional points are ON for this league, so yardage-based scoring (e.g. '25 yards per point') must be implemented as a continuous multiply (yards * points_per_unit), NOT floor(yards / threshold). Some platforms/leagues do integer-floor yardage bonuses instead -- this one explicitly does not.",
+  "roster_positions": {
+    "QB": 1,
+    "WR": 3,
+    "RB": 2,
+    "TE": 1,
+    "FLEX_WRT": 1,
+    "K": 1,
+    "DEF": 1,
+    "BN": 6
+  },
+  "scoring": {
+    "offense": {
+      "completion": 0.15,
+      "passing_yard": 0.04,
+      "passing_td": 6,
+      "interception_thrown": -3,
+      "rushing_yard": 0.1,
+      "rushing_td": 6,
+      "reception": 0.25,
+      "receiving_yard": 0.1,
+      "receiving_td": 6,
+      "return_yard": 0.04,
+      "return_td": 6,
+      "two_point_conversion": 2,
+      "fumble_lost": -2,
+      "offensive_fumble_return_td": 6
+    },
+    "kicking": {
+      "fg_made_0_19": 2,
+      "fg_made_20_29": 3,
+      "fg_made_30_39": 4,
+      "fg_made_40_49": 5,
+      "fg_made_50_plus": 6,
+      "fg_missed_0_19": -1,
+      "fg_missed_20_29": -1,
+      "fg_missed_30_39": -1,
+      "pat_made": 1,
+      "pat_missed": -1
+    },
+    "defense_special_teams": {
+      "sack": 1,
+      "interception": 2,
+      "fumble_recovery": 2,
+      "defensive_touchdown": 6,
+      "safety": 2,
+      "block_kick": 2,
+      "kick_punt_return_td": 6,
+      "points_allowed_0": 11,
+      "points_allowed_1_6": 8,
+      "points_allowed_7_13": 5,
+      "points_allowed_14_20": 2,
+      "points_allowed_21_27": 0,
+      "points_allowed_28_34": -2,
+      "points_allowed_35_plus": -5,
+      "fourth_down_stop": 2,
+      "yards_allowed_500_plus": -2,
+      "extra_point_returned": 2
+    }
+  },
+  "_data_availability_flags": [
+    "extra_point_returned (defense returns a blocked PAT) is extremely rare -- verify Friday whether nflverse's stats_player exposes this at all. If not derivable, treat as an unreachable 0-contribution stat rather than blocking the scoring function -- it will fire for essentially no player, ever.",
+    "offensive_fumble_return_td -- verify this isn't already folded into standard rushing/receiving TD counts in nflverse before adding it as a separate additive term, to avoid double-counting."
+  ]
+}
