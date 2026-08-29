@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+
+# Local data artifacts (weekly-grain SQLite is the source of truth but is rebuildable)
+*.db
+*.sqlite
+*.sqlite3
+data/*.parquet
+data/cache/
+
+# nflverse / nfl_data_py on-disk cache
+.nfl_data_py/
+
+# Editor / OS
+.DS_Store
+*.swp
