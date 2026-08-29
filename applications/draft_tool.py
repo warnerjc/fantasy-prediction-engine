@@ -98,13 +98,39 @@ def _build(league: str, spec, use_adp: bool, season: int | None, blend: float):
     return build_board(league, spec, adp=adp, sleeper_players=players, blend=blend)
 
 
+_EXPORT_COLS = ["overall_rank", "position", "pos_rank", "tier", "name", "most_recent_team",
+                "proj_ppg", "proj_points", "adp", "vbd", "model_vbd", "market_vbd",
+                "source", "is_rookie"]
+
+
+def _export(board, league: str) -> Path:
+    from .board import PROJECTIONS_DIR
+    df = board.players.sort_values("vbd", ascending=False).copy()
+    df["pos_rank"] = df.groupby("position")["vbd"].rank(ascending=False, method="first").astype("Int64")
+    out = df[[c for c in _EXPORT_COLS if c in df.columns]].copy()
+    for c in ("proj_ppg", "proj_points", "adp", "vbd", "model_vbd", "market_vbd"):
+        if c in out:
+            out[c] = out[c].round(1)
+    path = PROJECTIONS_DIR / f"{league}_board.csv"
+    out.to_csv(path, index=False)
+    return path
+
+
 def run(league: str, slot: int | None, watch: bool, draft_id: str | None,
-        interval: int, use_adp: bool, season: int | None, blend: float) -> None:
+        interval: int, use_adp: bool, season: int | None, blend: float,
+        export: bool = False, replay: bool = False) -> None:
     cfg = _load_config(league)
     spec = roster_spec(cfg)
     board = _build(league, spec, use_adp, season, blend)
     mix = "model only" if (blend >= 1.0 or not use_adp) else f"{blend:.0%} model / {1 - blend:.0%} ADP"
     print(f"{league}: {spec.teams} teams  |  VBD = {mix}  |  replacement ranks {spec.replacement_rank()}")
+
+    if export:
+        path = _export(board, league)
+        print(f"full ranked board -> {path}  ({len(board.players)} players)")
+
+    if replay:
+        watch = True
 
     if league == "yahoo" or not watch:
         state = None
@@ -122,6 +148,18 @@ def run(league: str, slot: int | None, watch: bool, draft_id: str | None,
         return
 
     did = draft_id or sleeper.draft_id_for_league(_LEAGUE_ID["sleeper"])
+
+    if replay:
+        st = sleeper.draft_state(did)
+        made = st["picks"]
+        print(f"replaying {len(made)} picks from Sleeper draft {did}")
+        for i in range(0, len(made) + 1, max(1, len(made) // 8 or 1)):
+            snap = {**st, "picks": made[:i], "next_pick_no": i + 1}
+            _render(board.with_drafted({p["player_id"] for p in made[:i] if p.get("player_id")}),
+                    snap, slot)
+        print("\nreplay complete.")
+        return
+
     print(f"watching Sleeper draft {did}  (every {interval}s, Ctrl-C to stop)")
     seen = -1
     while True:
@@ -150,9 +188,13 @@ def main() -> None:
     ap.add_argument("--season", type=int, default=None, help="ADP season (default: projections' target)")
     ap.add_argument("--blend", type=float, default=0.7,
                     help="VBD = blend*model + (1-blend)*ADP-implied (1.0 = pure model)")
+    ap.add_argument("--export", action="store_true",
+                    help="write the full ranked board to models/output/<league>_board.csv")
+    ap.add_argument("--replay", action="store_true",
+                    help="fast-forward a completed Sleeper draft through the live view (needs --draft)")
     args = ap.parse_args()
     run(args.league, args.slot, args.watch, args.draft, args.interval,
-        not args.no_adp, args.season, args.blend)
+        not args.no_adp, args.season, args.blend, args.export, args.replay)
 
 
 if __name__ == "__main__":

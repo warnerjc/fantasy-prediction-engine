@@ -1,5 +1,7 @@
 """Draft-tool tests: roster parsing, replacement ranks, VBD, snake pick math."""
 
+from collections import Counter
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -150,3 +152,42 @@ def test_my_targets_splits_gone_vs_available():
     assert len(t["likely_gone"]) == 2            # picks 1 and 2 go first
     gone_ids = set(t["likely_gone"]["sleeper_id"])
     assert gone_ids == set(b.top(2)["sleeper_id"])
+
+
+# --- mock draft simulator ------------------------------------------------
+
+def _sim_board(n_per_pos=30):
+    from applications.board import DraftBoard
+    rows = []
+    for pos, base in (("QB", 300), ("RB", 260), ("WR", 250), ("TE", 200), ("K", 120), ("DEF", 130)):
+        for i in range(n_per_pos):
+            rows.append(dict(player_id=f"{pos}{i}", sleeper_id=f"s_{pos}{i}", name=f"{pos}{i}",
+                             position=pos, most_recent_team="AA", adp=np.nan,
+                             proj_ppg=(base - i * 6) / 15,
+                             vbd=float(base - i * 6), overall_rank=0, source="model"))
+    df = pd.DataFrame(rows)
+    df["overall_rank"] = df["vbd"].rank(ascending=False, method="first").astype(int)
+    return DraftBoard(df.sort_values("vbd", ascending=False).reset_index(drop=True),
+                      RosterSpec(teams=10, dedicated={"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1},
+                                 flex=[frozenset({"RB", "WR", "TE"})]), set())
+
+
+def test_simulate_draft_fills_a_legal_roster_and_no_duplicates():
+    from applications.mock import simulate_draft
+    b = _sim_board()
+    picks, mine = simulate_draft(b, b.spec, my_slot=4, rounds=15,
+                                 rng=np.random.default_rng(0))
+    assert len(picks) == 10 * 15
+    assert picks["name"].is_unique                       # nobody drafted twice
+    assert len(mine) == 15
+    counts = Counter(mine["position"])
+    assert counts["QB"] >= 1 and counts["K"] >= 1 and counts["DEF"] >= 1   # required slots filled
+    assert counts["QB"] <= 3 and counts["TE"] <= 3        # not stacking absurdly
+
+
+def test_simulate_draft_is_deterministic_under_seed():
+    from applications.mock import simulate_draft
+    b = _sim_board()
+    a1 = simulate_draft(b, b.spec, 4, 15, np.random.default_rng(7))[0]
+    a2 = simulate_draft(b, b.spec, 4, 15, np.random.default_rng(7))[0]
+    assert a1.equals(a2)

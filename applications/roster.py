@@ -32,9 +32,10 @@ _SKIP = {"BN", "IR", "TAXI"}
 SCORABLE = ("QB", "RB", "WR", "TE", "K", "DEF")
 
 # "last starter" as the replacement baseline overvalues positions that are cheap
-# to replace off waivers (QB/TE much more so than RB/WR). Push their baseline
-# deeper by this factor — standard VBD practice without ADP data.
-_BASELINE_MULT = {"QB": 1.6, "RB": 1.0, "WR": 1.0, "TE": 1.3, "K": 1.0, "DEF": 1.0}
+# to replace off waivers (QB especially; TE a little). Push their baseline deeper
+# by this factor — standard VBD practice without ADP data. (The model/market blend
+# in board.py does most of the QB correction now; keep these modest.)
+_BASELINE_MULT = {"QB": 1.4, "RB": 1.0, "WR": 1.0, "TE": 1.15, "K": 1.0, "DEF": 1.0}
 
 
 @dataclass(frozen=True)

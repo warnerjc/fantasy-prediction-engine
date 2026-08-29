@@ -20,6 +20,8 @@ python -m applications.draft_tool --league yahoo               # static board, o
 | `--no-adp` | model-only board, skip the ADP fetch |
 | `--season` | ADP season (default: the projections' target season) |
 | `--blend W` | VBD = `W·model + (1−W)·ADP-implied` (default 0.7; `1.0` = pure model) |
+| `--export` | write the full ranked board to `models/output/<league>_board.csv` (the static list) |
+| `--replay --draft <id>` | fast-forward a completed Sleeper draft through the live view (dry-run of the `--watch` path) |
 
 Auction drafts are **not** supported — different logic (budget pacing, not
 positional scarcity). `run()` is where that would branch.
@@ -64,6 +66,28 @@ Projections are `{mean, p10, p50, p90}` (v1 fills only `mean` → `proj_ppg`). T
 board shows a single value and no floor/ceiling. When v2 populates real
 quantiles, `proj_p10`/`proj_p90` columns already ride through
 `models/output/*.csv` — the board can show a range without a rewrite.
+
+## mock.py — simulated / Monte-Carlo drafts
+
+```
+python -m applications.mock --league sleeper --slot 5            # one full draft
+python -m applications.mock --league sleeper --slot 5 --sims 200 # MC summary
+```
+
+Runs a full snake draft locally: the other seats pick ~by ADP (softmax over
+`-ADP / opp_temp`, positions killed at their roster cap), our seat picks off the
+live `DraftBoard` (highest VBD, with a roster-fit adjustment and a hard "fill
+K/DEF/starters before you run out of picks" rule). It exercises the **same board
+code path as `--watch`** without a draft room.
+
+- one run → prints our picks round-by-round + final roster + total VBD captured
+- `--sims N` → most-common pick per round, VBD-captured distribution, the round
+  you typically land your first QB/RB/WR/TE
+
+The sim drafter is greedy-VBD, not a real draft AI — its output is a **sanity
+check on the board and a read on where the model/blend leans** (e.g. it drafts
+QB/TE earlier than most humans, which is a signal to tune `--blend` / `_BASELINE_MULT`),
+not a strategy to copy.
 
 ### Known gaps
 
