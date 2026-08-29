@@ -113,10 +113,21 @@ Copilot session; reviewed and largely rebuilt here.)*
   `training_frame` assemble the v1 matrix (player × target_season, no label). Opponent/context
   built but held out of the v1 matrix — they're the v2 weekly join. Hand-checked vs Chase 2023.
   12 tests incl. leakage guards. `features/README.md`.
-- [ ] **v1 model** — next. **Two open decisions:** (a) target = season-total points
-  vs points-per-game (PPG handles missed games better; leaning PPG + a separate games-played
-  view); (b) per-position models vs one blended (plan allows blended as a Friday fallback,
-  per-position by Sunday). Walk-forward by season, LightGBM.
+- [x] **v1 model** — six per-position LightGBM models (QB/RB/WR/TE/K/DEF), **PPG target**,
+  config-driven (`ModelConfig`: target/objective/split/filters/quantiles), walk-forward by
+  season. Decisions made: PPG (not season-total — same unit v2 predicts); per-position for all
+  six incl. K/DEF (pulled K/DEF stats from PBP to do it). Labels league-specific via
+  `scoring.score`, features league-agnostic → per-league model is a relabel. `Prediction`
+  typed `{mean,p10,p50,p90}`, v1 fills mean only.
+  `python -m models.build --league sleeper|yahoo` → ranked `models/output/<league>_projections.csv`.
+  Walk-forward (2015–24): QB/WR ρ≈0.67, RB≈0.58, TE≈0.60; K/DEF ρ≈0.05–0.09 (near-noise,
+  expected). 2025 projections pass the eye test. `models/README.md`.
+- [ ] **`/applications`** — `draft_tool.py`: consume the ranked projections, pull live Sleeper
+  draft state (`1356741521163968513`), drop drafted players, add positional scarcity / VBD,
+  auto-refresh. Yahoo `236625`: static ranked list is already usable from the CSV.
+
+**Ahead of schedule** — v1 modeling done Friday; this leaves the weekend for the draft-day
+app + validation rather than a scramble.
 
 ### Sun 08-30 night — validate + refine
 - Sanity-check the model: SHAP/feature-importance should show targets/carries/red-zone
