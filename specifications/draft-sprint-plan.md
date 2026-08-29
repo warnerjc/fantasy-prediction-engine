@@ -140,10 +140,13 @@ tool) is done Friday. 55 tests. Remaining is validation + polish, not building:
   cached), `board.py` places every unmatched top-180 ADP player on the board with a VBD
   imputed from ADP (isotonic on players that have both). Tagged `(adp)`; `adp` column shown
   for everyone. Sleeper-id backfill from the cached player directory so they drop off when drafted.
+- [x] Model-vs-market — draft board now blends model VBD with an ADP-implied VBD
+  (`_blend_market`, isotonic curve, default `--blend 0.7`). Reins in the model rating elite
+  QBs ~2 rounds ahead of ADP. `--blend 1.0` = pure model.
 - [ ] Tuesday: dry-run `--watch` against a Sleeper mock draft.
 - [ ] `python -m models.build --backtest <season>` — wire the projected-vs-actual view in as a
   repeatable command (nice-to-have).
-- [ ] Tune `_BASELINE_MULT` / flex splits in `applications/roster.py` after a mock draft.
+- [ ] Tune `_BASELINE_MULT` / flex splits / `--blend` weight after a mock draft.
 
 ### Sun 08-30 night — validate + refine
 - Sanity-check the model: SHAP/feature-importance should show targets/carries/red-zone
