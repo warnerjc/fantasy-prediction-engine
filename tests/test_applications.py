@@ -5,7 +5,13 @@ import pandas as pd
 import pytest
 
 from applications.adp import normalize_name
-from applications.board import DraftBoard, _assign_tiers, _snake_pick_numbers, _unprojected_from_adp
+from applications.board import (
+    DraftBoard,
+    _assign_tiers,
+    _blend_market,
+    _snake_pick_numbers,
+    _unprojected_from_adp,
+)
 from applications.roster import RosterSpec, roster_spec
 
 
@@ -96,26 +102,45 @@ def test_normalize_name_strips_suffixes_and_punctuation():
     assert normalize_name("Michael Pittman II") == "michael pittman"
 
 
-def test_unprojected_from_adp_imputes_vbd_monotonically():
-    # 20 projected players with a clean decreasing vbd-vs-adp relationship
-    proj = pd.DataFrame({
-        "name": [f"P{i}" for i in range(20)],
-        "position": ["RB"] * 20,
-        "adp": np.arange(1, 21) * 3.0,
-        "vbd": 200 - np.arange(1, 21) * 8.0,
+def _proj_with_adp(n=20):
+    return pd.DataFrame({
+        "name": [f"P{i}" for i in range(n)], "position": ["RB"] * n, "source": ["model"] * n,
+        "adp": np.arange(1, n + 1) * 3.0, "vbd": 200.0 - np.arange(1, n + 1) * 8.0,
     })
+
+
+def test_unprojected_from_adp_selects_unmatched_and_leaves_vbd_nan():
     adp = pd.DataFrame({
         "name": ["Rookie A", "Rookie B", "P3"],
         "norm_name": ["rookie a", "rookie b", "p3"],
-        "position": ["RB", "RB", "RB"],
-        "team": ["LV", "NE", "X"],
+        "position": ["RB", "RB", "RB"], "team": ["LV", "NE", "X"],
         "adp": [12.0, 40.0, 9.0],       # P3 is already projected -> skipped
     })
-    out = _unprojected_from_adp(proj, adp, sleeper_players=None, max_adp=180)
-    assert set(out["name"]) == {"Rookie A", "Rookie B"}          # P3 excluded
-    a = out.set_index("name")["vbd"]
-    assert a["Rookie A"] > a["Rookie B"]                          # earlier ADP -> more value
-    assert out["proj_ppg"].isna().all() and (out["source"] == "adp").all()
+    out = _unprojected_from_adp(_proj_with_adp(), adp, sleeper_players=None, max_adp=180)
+    assert set(out["name"]) == {"Rookie A", "Rookie B"}
+    assert out["vbd"].isna().all() and (out["source"] == "adp").all()
+
+
+def test_blend_market_fills_rookies_and_pulls_model_toward_adp():
+    board = pd.concat([
+        _proj_with_adp(),
+        pd.DataFrame({"name": ["RookA", "RookB"], "position": ["RB", "RB"],
+                      "source": ["adp", "adp"], "adp": [12.0, 40.0], "vbd": [np.nan, np.nan]}),
+    ], ignore_index=True)
+
+    blended = _blend_market(board, weight=0.5)
+    r = blended.set_index("name")
+    # rookies get the ADP-implied value, monotonic in ADP
+    assert r.loc["RookA", "vbd"] > r.loc["RookB", "vbd"]
+    assert pd.notna(r.loc["RookA", "vbd"])
+    # a model player whose model VBD is far from the ADP curve is pulled toward it
+    p0 = r.loc["P0"]
+    assert min(p0["model_vbd"], p0["market_vbd"]) <= p0["vbd"] <= max(p0["model_vbd"], p0["market_vbd"])
+
+    pure = _blend_market(board, weight=1.0)
+    assert (pure[pure.source == "model"]["vbd"]
+            == pure[pure.source == "model"]["model_vbd"]).all()      # model untouched
+    assert pd.notna(pure.set_index("name").loc["RookA", "vbd"])      # rookies still filled
 
 
 def test_my_targets_splits_gone_vs_available():

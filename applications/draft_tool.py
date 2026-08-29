@@ -86,7 +86,7 @@ def _projection_season(league: str) -> int:
     return int(df["target_season"].iloc[0])
 
 
-def _build(league: str, spec, use_adp: bool, season: int | None):
+def _build(league: str, spec, use_adp: bool, season: int | None, blend: float):
     adp = players = None
     if use_adp:
         season = season or _projection_season(league)
@@ -95,15 +95,16 @@ def _build(league: str, spec, use_adp: bool, season: int | None):
             players = sleeper.all_players()
         except Exception as e:
             print(f"(ADP unavailable, model-only board: {e})")
-    return build_board(league, spec, adp=adp, sleeper_players=players)
+    return build_board(league, spec, adp=adp, sleeper_players=players, blend=blend)
 
 
 def run(league: str, slot: int | None, watch: bool, draft_id: str | None,
-        interval: int, use_adp: bool, season: int | None) -> None:
+        interval: int, use_adp: bool, season: int | None, blend: float) -> None:
     cfg = _load_config(league)
     spec = roster_spec(cfg)
-    board = _build(league, spec, use_adp, season)
-    print(f"{league}: {spec.teams} teams, replacement ranks {spec.replacement_rank()}")
+    board = _build(league, spec, use_adp, season, blend)
+    mix = "model only" if (blend >= 1.0 or not use_adp) else f"{blend:.0%} model / {1 - blend:.0%} ADP"
+    print(f"{league}: {spec.teams} teams  |  VBD = {mix}  |  replacement ranks {spec.replacement_rank()}")
 
     if league == "yahoo" or not watch:
         state = None
@@ -146,10 +147,12 @@ def main() -> None:
     ap.add_argument("--draft", default=None, help="Sleeper draft id (default: look up from league)")
     ap.add_argument("--interval", type=int, default=15, help="poll seconds when --watch")
     ap.add_argument("--no-adp", action="store_true", help="model-only board, skip ADP fetch")
-    ap.add_argument("--season", type=int, default=None, help="ADP season (default: this year)")
+    ap.add_argument("--season", type=int, default=None, help="ADP season (default: projections' target)")
+    ap.add_argument("--blend", type=float, default=0.7,
+                    help="VBD = blend*model + (1-blend)*ADP-implied (1.0 = pure model)")
     args = ap.parse_args()
     run(args.league, args.slot, args.watch, args.draft, args.interval,
-        not args.no_adp, args.season)
+        not args.no_adp, args.season, args.blend)
 
 
 if __name__ == "__main__":

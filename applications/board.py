@@ -94,8 +94,8 @@ def _attach_adp(proj: pd.DataFrame, adp: pd.DataFrame) -> pd.DataFrame:
 
 
 def _unprojected_from_adp(proj, adp, sleeper_players, max_adp) -> pd.DataFrame:
-    """Rows for ADP players with no model projection (rookies / missing season),
-    VBD imputed from ADP by isotonic regression on players who have both."""
+    """Rows for ADP players with no model projection (rookies / missing season).
+    `vbd` is left NaN here — `_blend_market` fills it from ADP."""
     if adp is None or adp.empty:
         return pd.DataFrame()
     have = set(zip(proj["name"].map(normalize_name), proj["position"]))
@@ -106,11 +106,9 @@ def _unprojected_from_adp(proj, adp, sleeper_players, max_adp) -> pd.DataFrame:
     # only offense — K/DEF name matching to ADP is unreliable and they're low-stakes
     miss = adp[~matched & adp["position"].isin(("QB", "RB", "WR", "TE"))
                & (adp["adp"] <= max_adp)].copy()
-    fit = proj.dropna(subset=["adp", "vbd"])
-    if miss.empty or len(fit) < 10:
+    if miss.empty:
         return pd.DataFrame()
 
-    iso = IsotonicRegression(increasing=False, out_of_bounds="clip").fit(fit["adp"], fit["vbd"])
     out = pd.DataFrame({
         "name": miss["name"].values,
         "position": miss["position"].values,
@@ -118,7 +116,7 @@ def _unprojected_from_adp(proj, adp, sleeper_players, max_adp) -> pd.DataFrame:
         "player_id": "adp:" + miss["name"].str.replace(r"\s+", "_", regex=True),
         "proj_ppg": np.nan, "proj_points": np.nan,
         "adp": miss["adp"].values,
-        "vbd": iso.predict(miss["adp"].values),
+        "vbd": np.nan,
         "source": "adp",
     })
     if sleeper_players is not None and not sleeper_players.empty:
@@ -129,6 +127,38 @@ def _unprojected_from_adp(proj, adp, sleeper_players, max_adp) -> pd.DataFrame:
     return out
 
 
+def _blend_market(board: pd.DataFrame, weight: float) -> pd.DataFrame:
+    """Blend model VBD with an ADP-implied VBD.
+
+    Isotonic regression maps ADP -> VBD using the model-projected players that
+    have both; that curve gives every ADP'd player a `market_vbd`. Final `vbd`:
+      - model player with ADP  -> weight·model + (1-weight)·market
+      - model player, no ADP    -> model (unchanged)
+      - unprojected (rookie)    -> market
+    `weight = 1.0` disables the blend.
+    """
+    board = board.copy()
+    board["model_vbd"] = board["vbd"]
+    board["market_vbd"] = np.nan
+
+    fit = board[(board["source"] == "model") & board["adp"].notna() & board["vbd"].notna()]
+    if len(fit) < 10:                       # no ADP -> rookies can't be placed; drop them
+        return board[board["source"] == "model"].copy()
+
+    iso = IsotonicRegression(increasing=False, out_of_bounds="clip").fit(fit["adp"], fit["model_vbd"])
+    has_adp = board["adp"].notna()
+    board.loc[has_adp, "market_vbd"] = iso.predict(board.loc[has_adp, "adp"].to_numpy())
+
+    m, mkt = board["model_vbd"], board["market_vbd"]
+    # unprojected (rookie) rows: always take the market value, regardless of weight
+    board.loc[m.isna() & mkt.notna(), "vbd"] = mkt[m.isna() & mkt.notna()]
+    # model rows with an ADP: blend (weight = 1.0 leaves the model value untouched)
+    if weight < 1.0:
+        both = m.notna() & mkt.notna()
+        board.loc[both, "vbd"] = weight * m[both] + (1 - weight) * mkt[both]
+    return board
+
+
 def build_board(
     league: str,
     spec: RosterSpec,
@@ -136,6 +166,7 @@ def build_board(
     adp: pd.DataFrame | None = None,
     sleeper_players: pd.DataFrame | None = None,
     max_adp: int = 180,
+    blend: float = 0.7,
 ) -> DraftBoard:
     proj = pd.read_csv(projections_dir / f"{league}_projections.csv")
     proj = proj[proj["position"].isin(SCORABLE)].copy()
@@ -162,6 +193,7 @@ def build_board(
     board["is_rookie"] = board.get("is_rookie", 0)
     board["is_rookie"] = board["is_rookie"].fillna(0).astype(int)
     board["sleeper_id"] = board["sleeper_id"].astype("string")
+    board = _blend_market(board, blend)
     board["tier"] = _assign_tiers(board)
     board["overall_rank"] = board["vbd"].rank(ascending=False, method="first").astype(int)
 

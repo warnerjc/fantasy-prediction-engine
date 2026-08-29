@@ -19,6 +19,7 @@ python -m applications.draft_tool --league yahoo               # static board, o
 | `--draft <id>` | Sleeper draft id (default: looked up from the league) |
 | `--no-adp` | model-only board, skip the ADP fetch |
 | `--season` | ADP season (default: the projections' target season) |
+| `--blend W` | VBD = `W·model + (1−W)·ADP-implied` (default 0.7; `1.0` = pure model) |
 
 Auction drafts are **not** supported — different logic (budget pacing, not
 positional scarcity). `run()` is where that would branch.
@@ -30,10 +31,14 @@ positional scarcity). `run()` is where that would branch.
    eligibility→position split), then a per-position replacement rank:
    `teams × (starters + flex share) × baseline_mult`. `baseline_mult` pushes
    QB/TE deeper (1.6 / 1.3) because "last starter" overvalues positions that
-   stream cheaply off waivers. A player's board value is
-   `projected_season_points − replacement_points[position]` — this is what makes
-   an RB and a QB comparable on one list. Tune `_BASELINE_MULT` in `roster.py`
-   to taste.
+   stream cheaply off waivers. Model VBD is
+   `projected_season_points − replacement_points[position]`.
+   **Then it's blended with the market** (`_blend_market`): an isotonic curve maps
+   ADP → VBD from the players that have both, and the final VBD is
+   `0.7·model + 0.3·market` (tunable via `--blend`). This reins in the model's
+   sharpest disagreements with consensus — most visibly elite QBs, which the raw
+   model rates ~2 rounds ahead of where 1-QB leagues draft them. `--blend 1.0`
+   turns it off. Tune `_BASELINE_MULT` in `roster.py` too.
 2. **Live draft state.** `sleeper.py` polls `/draft/<id>/picks`; drafted players
    drop off the board. Yahoo `236625` is an offline draft with no pollable state
    — the static board is the tool.
