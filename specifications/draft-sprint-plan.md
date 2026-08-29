@@ -143,10 +143,14 @@ tool) is done Friday. 55 tests. Remaining is validation + polish, not building:
 - [x] Model-vs-market — draft board now blends model VBD with an ADP-implied VBD
   (`_blend_market`, isotonic curve, default `--blend 0.7`). Reins in the model rating elite
   QBs ~2 rounds ahead of ADP. `--blend 1.0` = pure model.
-- [ ] Tuesday: dry-run `--watch` against a Sleeper mock draft.
-- [ ] `python -m models.build --backtest <season>` — wire the projected-vs-actual view in as a
-  repeatable command (nice-to-have).
-- [ ] Tune `_BASELINE_MULT` / flex splits / `--blend` weight after a mock draft.
+- [x] Static list — `python -m applications.draft_tool --league <l> --export` →
+  `models/output/<league>_board.csv` (full ranked, all positions, tiers, model/market/blended VBD).
+- [x] Dry-run without a real mock — `applications/mock.py` (local full-draft sim + `--sims N`
+  Monte Carlo, both leagues from configs); `draft_tool --replay --draft <id>` fast-forwards a
+  completed Sleeper draft through the live view. `--watch` plumbing exercised without a room.
+- [ ] `python -m models.build --backtest <season>` — repeatable projected-vs-actual view (nice-to-have).
+- [ ] Tune `_BASELINE_MULT` / flex splits / `--blend` weight — the mock sim drafts QB/TE
+  earlier than typical, a signal the blend could lean more toward market for those.
 
 ### Sun 08-30 night — validate + refine
 - Sanity-check the model: SHAP/feature-importance should show targets/carries/red-zone
