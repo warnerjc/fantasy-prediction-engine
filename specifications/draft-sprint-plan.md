@@ -122,12 +122,24 @@ Copilot session; reviewed and largely rebuilt here.)*
   `python -m models.build --league sleeper|yahoo` → ranked `models/output/<league>_projections.csv`.
   Walk-forward (2015–24): QB/WR ρ≈0.67, RB≈0.58, TE≈0.60; K/DEF ρ≈0.05–0.09 (near-noise,
   expected). 2025 projections pass the eye test. `models/README.md`.
-- [ ] **`/applications`** — `draft_tool.py`: consume the ranked projections, pull live Sleeper
-  draft state (`1356741521163968513`), drop drafted players, add positional scarcity / VBD,
-  auto-refresh. Yahoo `236625`: static ranked list is already usable from the CSV.
+- [x] **team-change features** — `changed_team` + new-team environment + vacated opportunity
+  share (`features/team_change.py`, `seasonal_rosters` table). Small net gain for RB/WR,
+  excluded from QB/TE. Does not fix marquee breakouts (Saquon RB19→1) — open problem, documented.
+- [x] **`/applications/draft_tool.py`** — snake draft board with value-over-replacement (VBD),
+  gap-based tiers, live Sleeper draft-state polling (`--watch`), snake pick math + "likely
+  available at your next pick", drafted-player filtering. Both leagues verified. Auction not
+  supported (different logic — flagged). `applications/README.md`.
+  `python -m applications.draft_tool --league sleeper --slot N --watch`
 
-**Ahead of schedule** — v1 modeling done Friday; this leaves the weekend for the draft-day
-app + validation rather than a scramble.
+**Well ahead of schedule** — the full v1 stack (data → scoring → features → models → draft
+tool) is done Friday. 55 tests. Remaining is validation + polish, not building:
+
+- [ ] Rookie handling — model omits rookies (no prior NFL season); the board just doesn't show
+  them. Need a rookie ADP list cross-reference for early rounds. Decide at app layer.
+- [ ] Tuesday: dry-run `--watch` against a Sleeper mock draft.
+- [ ] `python -m models.build --backtest <season>` — wire the projected-vs-actual view in as a
+  repeatable command (nice-to-have).
+- [ ] Tune `_BASELINE_MULT` / flex splits in `applications/roster.py` after a mock draft.
 
 ### Sun 08-30 night — validate + refine
 - Sanity-check the model: SHAP/feature-importance should show targets/carries/red-zone
