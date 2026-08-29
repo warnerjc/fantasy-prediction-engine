@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Simulated / Monte-Carlo mock draft. e.g.  bin/mock --league sleeper --slot 5 --sims 200
+cd "$(dirname "$0")/.." || exit 1
+exec .venv/bin/python -m applications.mock "$@"

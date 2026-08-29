@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Draft assistant. e.g.  bin/draft --league sleeper --slot 7 --watch
+cd "$(dirname "$0")/.." || exit 1
+exec .venv/bin/python -m applications.draft_tool "$@"

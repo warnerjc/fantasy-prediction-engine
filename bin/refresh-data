@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Rebuild the SQLite store from nflverse. e.g.  bin/refresh-data --seasons 2015-2026
+cd "$(dirname "$0")/.." || exit 1
+exec .venv/bin/python -m data.build "$@"
