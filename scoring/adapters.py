@@ -182,8 +182,9 @@ def normalize_yahoo(config: Mapping) -> ScoringRules:
     per_unit: dict[str, float] = {}
     for group in (_YAHOO_OFFENSE, _YAHOO_KICKING, _YAHOO_DST):
         for yahoo_key, canonical in group.items():
-            if yahoo_key in flat and flat[yahoo_key] is not None:
+            if flat.get(yahoo_key):  # skip missing / None / 0 -> per_unit stays a
                 per_unit[canonical] = per_unit.get(canonical, 0.0) + float(flat[yahoo_key])
+            #                        clean "what this league actually scores" view
 
     pts_tiers = tuple(
         Tier(lo, hi, float(flat[key]))

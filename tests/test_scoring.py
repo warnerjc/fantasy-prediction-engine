@@ -112,6 +112,41 @@ def test_non_canonical_per_unit_key_rejected():
         ScoringRules(per_unit={"points_per_touchdown": 6})
 
 
+# --- standard / no-bonus leagues ------------------------------------------
+
+# a realistic standard NON-PPR Sleeper payload: full key set, PPR + every bonus 0
+_STANDARD_NON_PPR_SLEEPER = {
+    "pass_yd": 0.04, "pass_td": 4, "pass_int": -1, "pass_2pt": 2,
+    "rush_yd": 0.1, "rush_td": 6, "rush_2pt": 2,
+    "rec": 0, "rec_yd": 0.1, "rec_td": 6, "rec_2pt": 2, "fum_lost": -2,
+    "bonus_pass_yd_300": 0, "bonus_rush_yd_100": 0, "bonus_rec_yd_100": 0,
+    "bonus_rush_rec_yd_100": 0, "bonus_rush_rec_yd_200": 0,
+    "pts_allow_0": 10, "pts_allow_1_6": 7, "pts_allow_7_13": 4,
+    "pts_allow_14_20": 1, "pts_allow_21_27": 0, "pts_allow_28_34": -1,
+    "pts_allow_35p": -4,
+}
+
+
+def test_standard_non_ppr_drops_receptions_and_bonuses():
+    rules = normalize_sleeper(_STANDARD_NON_PPR_SLEEPER)
+    assert K.REC not in rules.per_unit          # rec: 0 -> not scored
+    assert rules.yardage_bonuses == ()          # all bonuses 0 -> none
+    assert rules.yds_allowed_tiers == ()        # no yds_allow_* keys in payload
+    # Chase W5: 193*0.1 + 2*6, receptions worth nothing
+    assert score(CHASE_W5, rules, position="WR") == pytest.approx(193 * 0.1 + 2 * 6)
+
+
+def test_minimal_hand_built_rules_no_bonuses_no_tiers():
+    rules = ScoringRules(per_unit={
+        K.PASS_YD: 0.04, K.PASS_TD: 6, K.PASS_INT: -2,
+        K.RUSH_YD: 0.1, K.RUSH_TD: 6,
+        K.REC: 0.5, K.REC_YD: 0.1, K.REC_TD: 6, K.FUM_LOST: -2,
+    })
+    assert score(CHASE_W5, rules, position="WR") == pytest.approx(5 + 19.3 + 12)
+    # DST / kicker stats present but unscored by these rules -> ignored, no crash
+    assert score({K.DST_SACK: 3, K.DST_PTS_ALLOWED: 7}, rules) == pytest.approx(0.0)
+
+
 def test_open_top_tier_uses_inf():
     rules = ScoringRules(pts_allowed_tiers=(Tier(35, math.inf, -5),))
     assert score({K.DST_PTS_ALLOWED: 60}, rules) == pytest.approx(-5)
