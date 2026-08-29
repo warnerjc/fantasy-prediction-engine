@@ -105,11 +105,15 @@ Copilot session; reviewed and largely rebuilt here.)*
   mid-week). 7 tests. Schema doc in `data/README.md`.
   **Not landed (post-sprint, per scope above):** play-by-play → red-zone touches, kicker
   FG-by-distance, DST stat lines; external Vegas/weather APIs.
-- [ ] **`/features`** — next. As-of/window-parameterized functions on `player_week_stats`
-  (prior-season target share, carries, snap %, air yards; opponent-allowed-by-position from a
-  `GROUP BY`; Vegas implied total from `team_week`). Leakage rule: as-of week N never reads
-  week ≥ N outcomes.
-- [ ] **v1 model** — after features. **Two open decisions:** (a) target = season-total points
+- [x] **`/features`** — `window.py` engine (`AsOf` + `Window.prior_season()` / `.trailing()`,
+  `visible_weeks()` does leakage filtering once). Functions: `opportunity_features` (usage
+  totals/rates, target/rush/air-yards share, WOPR), `snap_features`, `opponent_allowed_features`
+  (`def_<POS>_<stat>_pg`), `context_features` (Vegas implied total/spread, home/rest/venue),
+  `identity_features` (age, exp, draft capital). `build.season_feature_matrix` /
+  `training_frame` assemble the v1 matrix (player × target_season, no label). Opponent/context
+  built but held out of the v1 matrix — they're the v2 weekly join. Hand-checked vs Chase 2023.
+  12 tests incl. leakage guards. `features/README.md`.
+- [ ] **v1 model** — next. **Two open decisions:** (a) target = season-total points
   vs points-per-game (PPG handles missed games better; leaning PPG + a separate games-played
   view); (b) per-position models vs one blended (plan allows blended as a Friday fallback,
   per-position by Sunday). Walk-forward by season, LightGBM.
