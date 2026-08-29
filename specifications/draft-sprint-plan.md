@@ -80,6 +80,40 @@ requirement for "done."
   (`1356741521163968513`, `236625`), correct against each league's actual scoring settings.
   This alone is a usable draft tool even with zero UI.
 
+#### Progress log — Fri 08-28
+
+*(Note: the initial repo scaffold + a first-pass `/scoring` were done in a separate
+Copilot session; reviewed and largely rebuilt here.)*
+
+- [x] **venv on Python 3.14.4** — full sprint stack (`pandas` 3.0.5, `lightgbm` 4.7.0,
+  `scikit-learn` 1.9.0, `nfl_data_py` 0.3.2, `numpy`, `scipy`, `pyarrow`, `fastparquet`,
+  `sqlite-utils`) installs cleanly, all wheels, no source builds. **3.12 fallback not needed**
+  — `prereq-checklist.md` updated. (Docker image still says pin 3.12; revisit, 3.14 looks fine.)
+- [x] **`/scoring` rebuilt** around a canonical stat vocabulary + platform adapters
+  (`normalize_sleeper` / `normalize_yahoo`), not a hand-typed key guess. Handles half/full/no
+  PPR, 4-vs-6pt pass TD, Sleeper yardage-threshold bonuses, kicker distance buckets, DST
+  points/yards-allowed tiers, TE-premium hook. Hand-verified vs a real line (Chase W5 2024)
+  under **both** sprint leagues; 25 tests. Full mapping tables in `scoring/README.md`.
+  Deferred: Sleeper `st_fum_rec` / `def_st_*` DST split (needs the PBP DST extractor;
+  would double-count otherwise — TODO in `adapters.py`).
+- [x] **`/data` pipeline** — `python -m data.build --seasons 2015-2024` lands six tables:
+  `player_week_stats` (54.5k rows, weekly grain, the source of truth), `snap_counts`,
+  `injuries`, `schedules` + derived `team_week` (opponent / home-away / rest / **Vegas implied
+  team total**), and the `player_ids` gsis↔pfr↔sleeper↔yahoo crosswalk. Idempotent
+  INSERT-OR-REPLACE on each table's PK (absorbs nflverse stat corrections). Real dupe hazards
+  found + handled (PFR reuses some player ids across two people; injury reports get re-issued
+  mid-week). 7 tests. Schema doc in `data/README.md`.
+  **Not landed (post-sprint, per scope above):** play-by-play → red-zone touches, kicker
+  FG-by-distance, DST stat lines; external Vegas/weather APIs.
+- [ ] **`/features`** — next. As-of/window-parameterized functions on `player_week_stats`
+  (prior-season target share, carries, snap %, air yards; opponent-allowed-by-position from a
+  `GROUP BY`; Vegas implied total from `team_week`). Leakage rule: as-of week N never reads
+  week ≥ N outcomes.
+- [ ] **v1 model** — after features. **Two open decisions:** (a) target = season-total points
+  vs points-per-game (PPG handles missed games better; leaning PPG + a separate games-played
+  view); (b) per-position models vs one blended (plan allows blended as a Friday fallback,
+  per-position by Sunday). Walk-forward by season, LightGBM.
+
 ### Sun 08-30 night — validate + refine
 - Sanity-check the model: SHAP/feature-importance should show targets/carries/red-zone
   touches/snaps dominating. If something else dominates, treat it as a leakage bug, not a
