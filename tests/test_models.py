@@ -82,6 +82,16 @@ def test_feature_columns_excludes_metadata_and_label():
     assert "targets_pg" in cols and "rec_yd_pg" in cols
 
 
+def test_feature_columns_honours_config_exclude_prefixes():
+    df = _assembled()
+    df["changed_team"] = 0
+    df["new_team_pass_ratio"] = 0.6
+    cfg = ModelConfig("TE", exclude_feature_prefixes=("changed_team", "new_team_"))
+    cols = feature_columns(df, cfg)
+    assert "changed_team" not in cols and "new_team_pass_ratio" not in cols
+    assert "targets_pg" in cols
+
+
 def test_config_is_swappable_without_touching_train_one():
     df = _assembled()
     base = ModelConfig("WR")

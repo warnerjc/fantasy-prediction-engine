@@ -61,6 +61,16 @@ Gain-importance sanity check (leakage guard): WR led by `rec_yd_pg` then
 `rush_yd_pg` / `carries`. Opportunity dominates efficiency — the leakage
 discipline in `/features` held.
 
+## Team-change features (walk-forward A/B)
+
+`changed_team` + new-team environment + vacated opportunity share (see
+`features/team_change.py`) gave a small net gain for **RB/WR** (WR ρ 0.69→0.70,
+RB 0.58→0.59, MAE down ~0.03) and a small drag on **QB/TE**, so the QB/TE configs
+set `exclude_feature_prefixes` to drop them. They did **not** rescue the marquee
+single-season breakouts (Saquon proj RB19 → finished RB1): last year's production
+dominates the split gain and the historical sample of "vet RB → better spot" is
+too thin. Genuinely hard; not a tuning fix.
+
 ## Known v1 gaps
 
 - **True rookies** (no prior NFL season) can't be projected by a prior-usage

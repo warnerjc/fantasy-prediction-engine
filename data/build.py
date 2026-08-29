@@ -48,6 +48,7 @@ def build(seasons: list[int], db_path=DB_PATH) -> dict[str, int]:
         step("player_week_stats", nflverse.weekly_player_stats(seasons))
         step("snap_counts", nflverse.snap_counts(seasons, crosswalk=xwalk))
         step("injuries", nflverse.injuries(seasons))
+        step("seasonal_rosters", nflverse.seasonal_rosters(seasons))
 
         sched = nflverse.schedules(seasons)
         step("schedules", sched)

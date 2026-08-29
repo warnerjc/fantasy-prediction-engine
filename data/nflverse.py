@@ -120,6 +120,19 @@ def team_week(schedules_df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values(["season", "week", "team"]).reset_index(drop=True)
 
 
+def seasonal_rosters(seasons: Iterable[int]) -> pd.DataFrame:
+    """One row per (player_id, season): the player's team for that season, plus
+    status / experience. Team here is pre-Week-1-known (free agency & trades
+    settle in the offseason), so `changed_team` derived from it is not leakage."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        df = nfl.import_seasonal_rosters(_seasons(seasons))
+    keep = ["player_id", "season", "team", "position", "status", "years_exp",
+            "entry_year", "rookie_year"]
+    df = df[[c for c in keep if c in df.columns]]
+    return df.dropna(subset=["player_id"]).drop_duplicates(["player_id", "season"]).reset_index(drop=True)
+
+
 def play_by_play(seasons: Iterable[int]) -> pd.DataFrame:
     """Raw play-by-play. Large (~50k rows/season x ~400 cols) — pulled once per
     build and fed to the derived-stat functions below, not stored whole."""

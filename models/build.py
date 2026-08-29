@@ -34,7 +34,7 @@ OFFENSE = ("QB", "RB", "WR", "TE")
 def _load_tables() -> dict[str, pd.DataFrame]:
     return {t: read_sql(f"SELECT * FROM {t}") for t in
             ("player_week_stats", "snap_counts", "player_ids", "team_week",
-             "kicking_stats", "team_defense_stats")}
+             "kicking_stats", "team_defense_stats", "seasonal_rosters")}
 
 
 def _feature_matrix(position: str, tbl: dict, target_seasons: list[int]) -> pd.DataFrame:
@@ -42,7 +42,9 @@ def _feature_matrix(position: str, tbl: dict, target_seasons: list[int]) -> pd.D
     for s in target_seasons:
         if position in OFFENSE:
             fm = season_feature_matrix(tbl["player_week_stats"], tbl["snap_counts"],
-                                       tbl["player_ids"], s, Window.prior_season(n_seasons=2))
+                                       tbl["player_ids"], s, Window.prior_season(n_seasons=2),
+                                       seasonal_rosters=tbl["seasonal_rosters"],
+                                       team_week=tbl["team_week"])
             fm = fm[fm["most_recent_pos"] == position] if not fm.empty else fm
         elif position == "K":
             fm = kicker_feature_matrix(tbl["kicking_stats"], tbl["team_week"], s,

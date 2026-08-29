@@ -139,6 +139,33 @@ def test_identity_age_experience_and_draft():
 
 # --- assembled matrix --------------------------------------------------------
 
+def test_team_change_features_flag_and_vacated_share():
+    from features import team_change_features
+
+    rows = []
+    # rb1 on OLD 2023, moves to NEW 2024. rb2 was on NEW 2023, leaves (vacates carries).
+    for wk in range(1, 6):
+        rows.append(_pws_row("rb1", "RB", "OLD", 2023, wk, carries=10, rushing_yards=40))
+        rows.append(_pws_row("rb2", "RB", "NEW", 2023, wk, carries=20, rushing_yards=80))
+        rows.append(_pws_row("rb3", "RB", "NEW", 2023, wk, carries=5, rushing_yards=15))
+    pws = pd.DataFrame(rows)
+    rosters = pd.DataFrame([
+        dict(player_id="rb1", season=2024, team="NEW"),   # moved OLD -> NEW
+        dict(player_id="rb2", season=2024, team="ELSE"),   # left NEW
+        dict(player_id="rb3", season=2024, team="NEW"),    # stayed
+    ])
+    tw = pd.DataFrame([dict(season=2023, week=w, game_type="REG", team=t, opponent="X",
+                            is_home=1, rest=7, div_game=0, implied_total=22.0,
+                            team_spread=0.0, roof="dome", temp=None, wind=None)
+                       for w in range(1, 6) for t in ("OLD", "NEW")])
+
+    tc = team_change_features(pws, rosters, tw, 2024).set_index("player_id")
+    assert tc.loc["rb1", "changed_team"] == 1
+    assert tc.loc["rb3", "changed_team"] == 0
+    # NEW's 2023 carries: rb2 100 + rb3 25 = 125; rb2 (100) departed -> 0.8 vacated
+    assert tc.loc["rb1", "vacated_rush_share_new_team"] == pytest.approx(0.8)
+
+
 def test_kicker_and_defense_matrices_are_prior_season_only():
     tw = pd.DataFrame([
         dict(season=2023, week=w, game_type="REG", team="GB", opponent="X", is_home=1,

@@ -28,6 +28,7 @@ PRIMARY_KEYS: dict[str, list[str]] = {
     "team_week": ["season", "week", "game_type", "team"],
     "kicking_stats": ["kicker_player_id", "season", "week", "game_type", "team"],
     "team_defense_stats": ["defense_team", "season", "week", "game_type"],
+    "seasonal_rosters": ["player_id", "season"],
     "player_ids": ["gsis_id"],
 }
 

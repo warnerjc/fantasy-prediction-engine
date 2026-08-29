@@ -15,6 +15,7 @@ import pandas as pd
 
 from .identity import identity_features
 from .opportunity import opportunity_features, snap_features
+from .team_change import team_change_features
 from .window import AsOf, Window, visible_weeks
 
 SKILL_POSITIONS = ("QB", "RB", "WR", "TE")
@@ -27,9 +28,12 @@ def season_feature_matrix(
     target_season: int,
     window: Window | None = None,
     positions: tuple[str, ...] = SKILL_POSITIONS,
+    seasonal_rosters: pd.DataFrame | None = None,
+    team_week: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Feature row per player, for predicting ``target_season``. Keyed by
     (``player_id``, ``target_season``). ``window`` defaults to the full prior season.
+    Pass ``seasonal_rosters`` + ``team_week`` to include team-change features.
     """
     window = window or Window.prior_season()
     as_of = AsOf(target_season, 1)
@@ -48,6 +52,11 @@ def season_feature_matrix(
     ).drop(columns=["gsis_id"], errors="ignore")
     feats = feats.merge(identity_features(player_ids, as_of), on="player_id", how="left")
 
+    if seasonal_rosters is not None and team_week is not None:
+        tc = team_change_features(pws, seasonal_rosters, team_week, target_season, window)
+        if not tc.empty:
+            feats = feats.merge(tc, on="player_id", how="left")
+
     feats = feats[feats["most_recent_pos"].isin(positions)].copy()
     feats.insert(1, "target_season", target_season)
     return feats.reset_index(drop=True)
@@ -60,12 +69,15 @@ def training_frame(
     target_seasons: list[int],
     window: Window | None = None,
     positions: tuple[str, ...] = SKILL_POSITIONS,
+    seasonal_rosters: pd.DataFrame | None = None,
+    team_week: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """``season_feature_matrix`` stacked over several target seasons — the X matrix
     for walk-forward training. The model attaches y and splits by ``target_season``.
     """
     frames = [
-        season_feature_matrix(pws, snap_counts, player_ids, s, window, positions)
+        season_feature_matrix(pws, snap_counts, player_ids, s, window, positions,
+                              seasonal_rosters, team_week)
         for s in sorted(target_seasons)
     ]
     frames = [f for f in frames if not f.empty]

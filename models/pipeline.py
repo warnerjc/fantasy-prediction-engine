@@ -37,10 +37,11 @@ def assemble_position(
     return merged
 
 
-def feature_columns(frame: pd.DataFrame) -> list[str]:
+def feature_columns(frame: pd.DataFrame, config: ModelConfig | None = None) -> list[str]:
+    exclude = config.exclude_feature_prefixes if config else ()
     cols = []
     for c in frame.columns:
-        if c in NON_FEATURE_COLS:
+        if c in NON_FEATURE_COLS or c.startswith(exclude):
             continue
         if pd.api.types.is_numeric_dtype(frame[c]) or pd.api.types.is_bool_dtype(frame[c]):
             cols.append(c)
@@ -57,6 +58,7 @@ def _lgbm(config: ModelConfig, objective: str | None = None, alpha: float | None
         subsample=config.subsample,
         colsample_bytree=config.colsample_bytree,
         subsample_freq=1,
+        random_state=config.random_state,
         verbose=-1,
     )
     if (objective or config.objective) == "tweedie":
@@ -89,7 +91,7 @@ def _training_mask(frame: pd.DataFrame, config: ModelConfig) -> pd.Series:
 
 
 def train_one(frame: pd.DataFrame, config: ModelConfig) -> FittedModel:
-    feats = feature_columns(frame)
+    feats = feature_columns(frame, config)
     train = frame[_training_mask(frame, config)]
     X, y = train[feats], train[config.target]
     w = train["label_games"] if config.sample_weight_by_label_games else None

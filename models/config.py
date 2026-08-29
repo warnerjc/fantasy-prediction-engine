@@ -37,6 +37,10 @@ class ModelConfig:
     min_train_seasons: int = 3
     sample_weight_by_label_games: bool = True
     quantiles: tuple[float, ...] = ()   # v1 empty -> mean only
+    random_state: int = 42             # LightGBM subsampling is stochastic; pin it
+    # feature-name prefixes to drop for this position (a walk-forward A/B showed
+    # team-change features help RB/WR but slightly hurt QB/TE)
+    exclude_feature_prefixes: tuple[str, ...] = ()
 
     def with_(self, **kw) -> "ModelConfig":
         return replace(self, **kw)
@@ -44,11 +48,13 @@ class ModelConfig:
 
 # per-position starting points. K/DEF get a shorter tree / more regularization —
 # far less signal, easy to overfit.
+_TEAM_CHANGE = ("changed_team", "new_team_", "vacated_")
+
 DEFAULT_CONFIGS: dict[str, ModelConfig] = {
-    "QB": ModelConfig("QB"),
+    "QB": ModelConfig("QB", exclude_feature_prefixes=_TEAM_CHANGE),
     "RB": ModelConfig("RB"),
     "WR": ModelConfig("WR"),
-    "TE": ModelConfig("TE"),
+    "TE": ModelConfig("TE", exclude_feature_prefixes=_TEAM_CHANGE),
     "K": ModelConfig("K", num_leaves=15, n_estimators=300, min_child_samples=30,
                      min_feature_games=6, min_label_games=6),
     # DEF PPG goes negative in some leagues (points-allowed penalties) -> L2, not tweedie

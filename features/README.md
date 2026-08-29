@@ -31,6 +31,7 @@ week itself — that's what `context_features` uses.
 | `opponent_allowed_features(visible)` | `visible_weeks(pws, …)` | `defense_team` — `def_<QB\|RB\|WR\|TE>_<stat>_pg` allowed, `def_games` | outcome (opposing scorers) |
 | `context_features(team_week, as_of)` | `team_week` | `team` — `opponent`, `is_home`, `rest`, `implied_total`, `team_spread`, `div_game`, `is_dome` / `is_outdoors`, `short_week` | pre-game-known |
 | `identity_features(player_ids, as_of)` | `player_ids` | `player_id` — `age`, `years_exp`, `is_rookie`, `draft_round`, `draft_ovr`, `undrafted` | pre-game-known |
+| `team_change_features(pws, seasonal_rosters, team_week, target_season, window=None)` | `player_week_stats` + `seasonal_rosters` + `team_week` | `player_id` — `changed_team`, new team's prior pass ratio / implied total, `vacated_tgt_share_new_team` / `vacated_rush_share_new_team` (share of the new team's prior opportunity held by players who left) | pre-game-known (offseason moves settle before Week 1) |
 | `kicker_feature_matrix(kicking_stats, team_week, target_season, window=None)` | `kicking_stats` + `team_week` | `player_id` (kicker) — prior FG made/att per game, FG%, 50+/game, `xp_made_pg`, + team implied-total proxy | outcome + pre-game-known |
 | `defense_feature_matrix(team_defense_stats, team_week, target_season, window=None)` | `team_defense_stats` + `team_week` | `player_id` (team) — prior `dst_*_pg`, `takeaways_pg_prior`, + team spread/implied-total proxy | outcome + pre-game-known |
 
@@ -44,6 +45,14 @@ week itself — that's what `context_features` uses.
 - `training_frame(…, target_seasons)` — `season_feature_matrix` stacked over
   several seasons = the X matrix for walk-forward training; the model splits on
   `target_season`.
+
+Pass `seasonal_rosters` + `team_week` to `season_feature_matrix` to add
+team-change features (a walk-forward A/B showed they help RB/WR: WR ρ 0.69→0.70,
+RB 0.58→0.59, both MAE down slightly; they slightly hurt QB/TE, so the QB/TE
+model configs exclude them). They did **not** fix the big single-season breakout
+misses (Saquon RB19→RB1) — prior-year production still dominates the trees and
+there aren't enough historical "veteran RB → better situation" examples to learn
+the pattern. Open problem.
 
 `context_features` / `opponent_allowed_features` are **not** folded into
 `season_feature_matrix` — they're per-game and belong to the v2 weekly matrix.
