@@ -53,6 +53,11 @@ def build(seasons: list[int], db_path=DB_PATH) -> dict[str, int]:
         step("schedules", sched)
         step("team_week", nflverse.team_week(sched))
 
+        print("  pulling play-by-play (large)...")
+        pbp = nflverse.play_by_play(seasons)
+        step("kicking_stats", nflverse.kicking_stats(pbp))
+        step("team_defense_stats", nflverse.team_defense_stats(pbp))
+
         _sanity(conn)
         return counts
     finally:

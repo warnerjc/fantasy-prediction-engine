@@ -71,5 +71,46 @@ def canonical_offense_stats(weekly: pd.DataFrame) -> pd.DataFrame:
 
 
 def stats_dict(row: Mapping[str, Any]) -> dict[str, float]:
-    """One canonical-stats row (from ``canonical_offense_stats``) as a plain dict."""
+    """One canonical-stats row (from any extractor here) as a plain dict."""
     return {k: float(v) for k, v in row.items() if k in K.ALL_KEYS and pd.notna(v)}
+
+
+# data.kicking_stats column -> canonical key (source cols are already bucketed)
+_KICKING = {
+    "fg_made": K.K_FG_MADE, "fg_missed": K.K_FG_MISSED, "fg_made_yds": K.K_FG_MADE_YDS,
+    "fg_made_0_19": K.K_FG_MADE_0_19, "fg_made_20_29": K.K_FG_MADE_20_29,
+    "fg_made_30_39": K.K_FG_MADE_30_39, "fg_made_40_49": K.K_FG_MADE_40_49,
+    "fg_made_50p": K.K_FG_MADE_50P,
+    "fg_missed_0_19": K.K_FG_MISSED_0_19, "fg_missed_20_29": K.K_FG_MISSED_20_29,
+    "fg_missed_30_39": K.K_FG_MISSED_30_39, "fg_missed_40_49": K.K_FG_MISSED_40_49,
+    "fg_missed_50p": K.K_FG_MISSED_50P,
+    "xp_made": K.K_XP_MADE, "xp_missed": K.K_XP_MISSED,
+}
+
+# data.team_defense_stats already uses canonical dst_* names; just carry them through
+_DST = {c: c for c in (
+    K.DST_SACK, K.DST_INT, K.DST_FUM_REC, K.DST_SAFETY, K.DST_TD, K.DST_BLK_KICK,
+    K.DST_PTS_ALLOWED, K.DST_YDS_ALLOWED,
+)}
+
+
+def canonical_kicking_stats(kicking: pd.DataFrame) -> pd.DataFrame:
+    """`data.kicking_stats` rows -> canonical stat columns, keyed by
+    `player_id` (= `kicker_player_id`), `season`, `week`."""
+    out = kicking[[c for c in ("kicker_player_id", "season", "week", "game_type", "team")
+                   if c in kicking.columns]].rename(columns={"kicker_player_id": "player_id"})
+    for src, canonical in _KICKING.items():
+        out[canonical] = pd.to_numeric(kicking.get(src), errors="coerce").fillna(0) \
+            if src in kicking.columns else 0
+    return out
+
+
+def canonical_dst_stats(team_defense: pd.DataFrame) -> pd.DataFrame:
+    """`data.team_defense_stats` rows -> canonical stat columns, keyed by
+    `team` (= `defense_team`), `season`, `week`."""
+    out = team_defense[[c for c in ("defense_team", "season", "week", "game_type")
+                        if c in team_defense.columns]].rename(columns={"defense_team": "team"})
+    for src, canonical in _DST.items():
+        out[canonical] = pd.to_numeric(team_defense.get(src), errors="coerce").fillna(0) \
+            if src in team_defense.columns else 0
+    return out

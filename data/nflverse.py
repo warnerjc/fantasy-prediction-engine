@@ -12,6 +12,7 @@ import warnings
 from typing import Iterable
 
 import nfl_data_py as nfl
+import numpy as np
 import pandas as pd
 
 # columns from import_weekly_data we deliberately do NOT land in player_week_stats
@@ -117,6 +118,103 @@ def team_week(schedules_df: pd.DataFrame) -> pd.DataFrame:
     out = pd.concat([home, away], ignore_index=True)
     out["game_type"] = out["game_type"].fillna("REG")
     return out.sort_values(["season", "week", "team"]).reset_index(drop=True)
+
+
+def play_by_play(seasons: Iterable[int]) -> pd.DataFrame:
+    """Raw play-by-play. Large (~50k rows/season x ~400 cols) — pulled once per
+    build and fed to the derived-stat functions below, not stored whole."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return nfl.import_pbp_data(_seasons(seasons), downcast=True)
+
+
+_FG_BUCKETS = [(0, 19, "0_19"), (20, 29, "20_29"), (30, 39, "30_39"),
+               (40, 49, "40_49"), (50, 99, "50p")]
+
+
+def _fg_bucket(distance: pd.Series) -> pd.Series:
+    out = pd.Series(pd.NA, index=distance.index, dtype="object")
+    for lo, hi, label in _FG_BUCKETS:
+        out = out.mask(distance.between(lo, hi), label)
+    return out
+
+
+def kicking_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Weekly kicker lines from PBP: FG made/missed by distance bucket, XP made/missed.
+    Keyed `(kicker_player_id, season, week, game_type, team)` — `kicker_player_id`
+    is a gsis id, joins straight to `player_week_stats.player_id`."""
+    fg = pbp[pbp["field_goal_attempt"] == 1].copy()
+    fg["bucket"] = _fg_bucket(fg["kick_distance"])
+    fg["made"] = fg["field_goal_result"].eq("made")
+    fg = fg.dropna(subset=["kicker_player_id", "bucket"])
+
+    rows = []
+    key = ["season", "week", "season_type", "posteam", "kicker_player_id"]
+    for keyvals, g in fg.groupby(key, dropna=False):
+        rec = dict(zip(key, keyvals))
+        rec["fg_made"] = int(g["made"].sum())
+        rec["fg_missed"] = int((~g["made"]).sum())
+        rec["fg_made_yds"] = float(g.loc[g["made"], "kick_distance"].sum())
+        for _, _, label in _FG_BUCKETS:
+            b = g[g["bucket"] == label]
+            rec[f"fg_made_{label}"] = int(b["made"].sum())
+            rec[f"fg_missed_{label}"] = int((~b["made"]).sum())
+        rows.append(rec)
+    fg_wk = pd.DataFrame(rows)
+
+    xp = pbp[pbp["extra_point_attempt"] == 1].copy()
+    xp = xp.dropna(subset=["kicker_player_id"])
+    xp["good"] = xp["extra_point_result"].eq("good")
+    xp_wk = (
+        xp.groupby(key, dropna=False)
+        .agg(xp_made=("good", "sum"), xp_missed=("good", lambda s: (~s).sum()))
+        .reset_index()
+    )
+
+    out = fg_wk.merge(xp_wk, on=key, how="outer")
+    out = out.rename(columns={"season_type": "game_type", "posteam": "team"})
+    num = [c for c in out.columns if c not in ("season", "week", "game_type", "team", "kicker_player_id")]
+    out[num] = out[num].fillna(0)
+    return out.reset_index(drop=True)
+
+
+def team_defense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Weekly team-defense lines from PBP: sacks, takeaways, defensive/return TDs,
+    safeties, blocked kicks, points & yards allowed. Keyed
+    `(defense_team, season, week, game_type)`. Covers ~all standard DST scoring;
+    4th-down stops and defensive 2pt returns are omitted (rare / low value)."""
+    p = pbp[pbp["defteam"].notna()].copy()
+    key = ["season", "week", "season_type", "defteam"]
+
+    agg = p.groupby(key, dropna=False).agg(
+        dst_sack=("sack", "sum"),
+        dst_int=("interception", "sum"),
+        dst_fum_rec=("fumble_lost", "sum"),      # offense lost it => defense recovered
+        dst_safety=("safety", "sum"),
+        dst_yds_allowed=("yards_gained", "sum"),
+    ).reset_index()
+
+    # TDs scored by the team while on defense (INT/fumble return + punt/KO return)
+    td = p[(p["touchdown"] == 1) & (p["td_team"] == p["defteam"])]
+    td_wk = td.groupby(key, dropna=False).size().rename("dst_td").reset_index()
+
+    blk = p[p["field_goal_result"].eq("blocked") | p["extra_point_result"].eq("blocked")]
+    blk_wk = blk.groupby(key, dropna=False).size().rename("dst_blk_kick").reset_index()
+
+    # points allowed: the defense's team conceded the opponent's final score
+    games = p.drop_duplicates(["game_id", "defteam"]).copy()
+    games["dst_pts_allowed"] = np.where(
+        games["defteam"] == games["home_team"], games["away_score"], games["home_score"]
+    )
+    pa_wk = games[key + ["dst_pts_allowed"]]
+
+    out = agg.merge(td_wk, on=key, how="left").merge(blk_wk, on=key, how="left").merge(pa_wk, on=key, how="left")
+    out = out.rename(columns={"season_type": "game_type", "defteam": "defense_team"})
+    fill = ["dst_td", "dst_blk_kick"]
+    out[fill] = out[fill].fillna(0)
+    for c in ("dst_sack", "dst_int", "dst_fum_rec", "dst_safety", "dst_td", "dst_blk_kick"):
+        out[c] = out[c].astype(int)
+    return out.reset_index(drop=True)
 
 
 def player_ids() -> pd.DataFrame:

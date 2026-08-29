@@ -20,14 +20,20 @@ Every table has an explicit primary key and is written with `INSERT OR REPLACE`
 | `injuries` | `(gsis_id, season, week, game_type, team)` | `nfl.import_injuries` | Weekly practice/game report. Re-issued reports are deduped to the latest `date_modified`. `team` in PK handles mid-week trades. |
 | `schedules` | `(game_id)` | `nfl.import_schedules` | One row per game. Carries rest days, roof/surface/`temp`/`wind`, and the closing Vegas `spread_line` / `total_line`. |
 | `team_week` | `(season, week, game_type, team)` | derived from `schedules` | `schedules` exploded to one row per team with pre-game-known context only: `opponent`, `is_home`, `rest`, `div_game`, weather, `implied_total` (`total_line/2 ± spread_line/2`), `team_spread`. Safe for as-of-week features — no outcome columns. |
+| `kicking_stats` | `(kicker_player_id, season, week, game_type, team)` | derived from `import_pbp_data` | Weekly kicker line: `fg_made`/`fg_missed` + by-distance buckets (`fg_made_0_19 … _50p`, same for missed; blocked counts as missed), `fg_made_yds`, `xp_made`/`xp_missed`. `kicker_player_id` is a gsis id. |
+| `team_defense_stats` | `(defense_team, season, week, game_type)` | derived from `import_pbp_data` | Weekly DST line, already in canonical `dst_*` names: `dst_sack`, `dst_int`, `dst_fum_rec` (= offensive fumbles lost), `dst_safety`, `dst_td` (INT/fumble/return TDs the team scored), `dst_blk_kick`, `dst_pts_allowed`, `dst_yds_allowed`. 4th-down stops and defensive 2pt returns omitted (rare / low fantasy value). |
 | `player_ids` | `(gsis_id)` | `nfl.import_ids` | Cross-reference: `gsis_id ↔ pfr_id ↔ sleeper_id ↔ yahoo_id ↔ espn_id`. Use this for every cross-source join — never join on name/team. Rows with a null `gsis_id` are dropped (a handful of never-active players). |
+
+Play-by-play (`import_pbp_data`, ~50k rows/season × ~400 cols) is pulled during
+each build and used to derive `kicking_stats` + `team_defense_stats`, but is **not
+stored whole** — it's large and the two derived tables are all the sprint needs.
+Landing raw (or red-zone-filtered) PBP for opportunity features is a later step.
 
 ## Not landed yet (out of scope for the draft sprint)
 
-- **Play-by-play** (`import_pbp_data`) — needed for red-zone touches, and for
-  kicker (FG-by-distance) and DST (points/yards allowed, sacks, takeaways)
-  stat lines. The scoring module already accepts those canonical stats; the
-  extractor that fills them is a post-sprint pipeline addition.
+- **Raw / red-zone play-by-play** — PBP is pulled and aggregated (see above) but
+  not stored row-level. Red-zone touches & carries-inside-10 for opportunity
+  features need a stored (filtered) PBP table — a later step.
 - **Vegas odds API / weather API** — `schedules` already carries closing
   spread/total and basic weather, enough for v1. Live odds movement is a v2
   weekly-tool concern.

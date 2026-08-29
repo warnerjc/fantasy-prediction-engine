@@ -12,7 +12,12 @@ import pandas as pd
 import pytest
 
 from scoring import ScoringRules, normalize_sleeper, normalize_yahoo, score, stat_keys as K
-from scoring.extract import canonical_offense_stats, stats_dict
+from scoring.extract import (
+    canonical_dst_stats,
+    canonical_kicking_stats,
+    canonical_offense_stats,
+    stats_dict,
+)
 from scoring.rules import Tier, YardageBonus
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -187,6 +192,29 @@ def test_canonical_offense_stats_maps_and_sums_fumbles():
     assert row[K.TWO_PT] == 1
     d = stats_dict(row)
     assert d[K.RUSH_ATT] == 12 and K.FUM_LOST in d
+
+
+def test_canonical_kicking_stats_score_under_yahoo(yahoo_rules):
+    kicking = pd.DataFrame([{
+        "kicker_player_id": "00-k1", "season": 2024, "week": 1,
+        "fg_made_20_29": 1, "fg_made_40_49": 2, "fg_made_50p": 1,
+        "fg_missed_30_39": 1, "xp_made": 3, "fg_made_yds": 180,
+    }])
+    d = stats_dict(canonical_kicking_stats(kicking).iloc[0])
+    assert score(d, yahoo_rules, position="K") == pytest.approx(
+        1 * 3 + 2 * 5 + 1 * 6 + 1 * -1 + 3 * 1
+    )
+
+
+def test_canonical_dst_stats_score_under_sleeper(sleeper_rules):
+    team_def = pd.DataFrame([{
+        "defense_team": "BAL", "season": 2024, "week": 1,
+        "dst_sack": 5, "dst_int": 2, "dst_fum_rec": 1, "dst_td": 1,
+        "dst_pts_allowed": 10, "dst_yds_allowed": 300,
+    }])
+    d = stats_dict(canonical_dst_stats(team_def).iloc[0])
+    # sack 2*5, int 2*2, fum_rec 2*1, def_td 6, pts_allow_7_13 -> 7
+    assert score(d, sleeper_rules, position="DEF") == pytest.approx(10 + 4 + 2 + 6 + 7)
 
 
 def test_extracted_stats_score_consistently(sleeper_rules):
