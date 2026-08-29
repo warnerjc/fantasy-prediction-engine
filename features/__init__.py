@@ -15,6 +15,7 @@ from .context import context_features
 from .identity import identity_features
 from .opponent import opponent_allowed_features
 from .opportunity import opportunity_features, snap_features
+from .special import defense_feature_matrix, kicker_feature_matrix
 from .window import AsOf, Window, visible_weeks, week_index
 
 __all__ = [
@@ -29,4 +30,6 @@ __all__ = [
     "identity_features",
     "season_feature_matrix",
     "training_frame",
+    "kicker_feature_matrix",
+    "defense_feature_matrix",
 ]

@@ -8,7 +8,9 @@ from features import (
     AsOf,
     Window,
     context_features,
+    defense_feature_matrix,
     identity_features,
+    kicker_feature_matrix,
     opponent_allowed_features,
     opportunity_features,
     season_feature_matrix,
@@ -136,6 +138,35 @@ def test_identity_age_experience_and_draft():
 
 
 # --- assembled matrix --------------------------------------------------------
+
+def test_kicker_and_defense_matrices_are_prior_season_only():
+    tw = pd.DataFrame([
+        dict(season=2023, week=w, game_type="REG", team="GB", opponent="X", is_home=1,
+             rest=7, div_game=0, implied_total=24.0, team_spread=-2.0, roof="dome",
+             temp=None, wind=None)
+        for w in range(1, 5)
+    ])
+    kick = pd.DataFrame([
+        dict(kicker_player_id="k1", season=2023, week=w, game_type="REG", team="GB",
+             fg_made=2, fg_missed=0, fg_made_50p=1, fg_made_yds=80, xp_made=3, xp_missed=0)
+        for w in range(1, 5)
+    ] + [dict(kicker_player_id="k1", season=2024, week=1, game_type="REG", team="GB",
+              fg_made=9, fg_missed=9, fg_made_50p=9, fg_made_yds=999, xp_made=9, xp_missed=9)])
+    km = kicker_feature_matrix(kick, tw, 2024).set_index("player_id")
+    assert km.loc["k1", "games"] == 4                     # 2023 only
+    assert km.loc["k1", "fg_made_pg"] == 2
+    assert km.loc["k1", "team_implied_total_prior"] == pytest.approx(24.0)
+
+    d = pd.DataFrame([
+        dict(defense_team="GB", season=2023, week=w, game_type="REG", dst_sack=3, dst_int=1,
+             dst_fum_rec=1, dst_safety=0, dst_td=0, dst_blk_kick=0, dst_pts_allowed=20,
+             dst_yds_allowed=330)
+        for w in range(1, 5)
+    ])
+    dm = defense_feature_matrix(d, tw, 2024).set_index("player_id")
+    assert dm.loc["GB", "dst_sack_pg_prior"] == pytest.approx(3.0)
+    assert dm.loc["GB", "takeaways_pg_prior"] == pytest.approx(2.0)
+
 
 def test_season_feature_matrix_is_keyed_and_leak_free(pws):
     snaps = pd.DataFrame(columns=["gsis_id", "season", "week", "game_type", "offense_pct",
