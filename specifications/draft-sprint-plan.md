@@ -134,8 +134,10 @@ Copilot session; reviewed and largely rebuilt here.)*
 **Well ahead of schedule** — the full v1 stack (data → scoring → features → models → draft
 tool) is done Friday. 55 tests. Remaining is validation + polish, not building:
 
-- [ ] Rookie handling — model omits rookies (no prior NFL season); the board just doesn't show
-  them. Need a rookie ADP list cross-reference for early rounds. Decide at app layer.
+- [x] Rookie handling — `applications/adp.py` pulls crowd ADP (fantasyfootballcalculator.com,
+  cached), `board.py` places every unmatched top-180 ADP player on the board with a VBD
+  imputed from ADP (isotonic on players that have both). Tagged `(adp)`; `adp` column shown
+  for everyone. Sleeper-id backfill from the cached player directory so they drop off when drafted.
 - [ ] Tuesday: dry-run `--watch` against a Sleeper mock draft.
 - [ ] `python -m models.build --backtest <season>` — wire the projected-vs-actual view in as a
   repeatable command (nice-to-have).
