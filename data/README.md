@@ -1,0 +1,41 @@
+# /data — ingestion layer
+
+Pulls raw stats + context into a local SQLite store (`data/nfl.db`, git-ignored).
+
+```
+python -m data.build --seasons 2015-2024     # full (re)build
+python -m data.build --seasons 2025          # weekly in-season refresh
+```
+
+Every table has an explicit primary key and is written with `INSERT OR REPLACE`
+(`data.db.upsert`), so re-running is safe and picks up nflverse stat corrections
+(which land for ~2 weeks after each game). No append-only tables.
+
+## Tables
+
+| table | grain / PK | source | notes |
+|---|---|---|---|
+| `player_week_stats` | `(player_id, season, week, season_type)` | `nfl.import_weekly_data` | **The source of truth.** Offensive box-score production. `player_id` = nflverse `gsis_id`. `recent_team`→`team`, `opponent_team`→`opponent`. Season totals are a `GROUP BY` on this — never a second table. A player with no row for a week (bye/inactive/no production) is *absent*, not a zero row. |
+| `snap_counts` | `(pfr_player_id, season, week, game_type, team)` | `nfl.import_snap_counts` | Off/def/ST snaps + pct. `gsis_id` attached via the `player_ids` crosswalk (>99% match for QB/RB/WR/TE; ~18% of *all* rows unmatched — mostly OL/DL not in the crosswalk). `team` is in the PK because PFR occasionally shares one id between two players. |
+| `injuries` | `(gsis_id, season, week, game_type, team)` | `nfl.import_injuries` | Weekly practice/game report. Re-issued reports are deduped to the latest `date_modified`. `team` in PK handles mid-week trades. |
+| `schedules` | `(game_id)` | `nfl.import_schedules` | One row per game. Carries rest days, roof/surface/`temp`/`wind`, and the closing Vegas `spread_line` / `total_line`. |
+| `team_week` | `(season, week, game_type, team)` | derived from `schedules` | `schedules` exploded to one row per team with pre-game-known context only: `opponent`, `is_home`, `rest`, `div_game`, weather, `implied_total` (`total_line/2 ± spread_line/2`), `team_spread`. Safe for as-of-week features — no outcome columns. |
+| `player_ids` | `(gsis_id)` | `nfl.import_ids` | Cross-reference: `gsis_id ↔ pfr_id ↔ sleeper_id ↔ yahoo_id ↔ espn_id`. Use this for every cross-source join — never join on name/team. Rows with a null `gsis_id` are dropped (a handful of never-active players). |
+
+## Not landed yet (out of scope for the draft sprint)
+
+- **Play-by-play** (`import_pbp_data`) — needed for red-zone touches, and for
+  kicker (FG-by-distance) and DST (points/yards allowed, sacks, takeaways)
+  stat lines. The scoring module already accepts those canonical stats; the
+  extractor that fills them is a post-sprint pipeline addition.
+- **Vegas odds API / weather API** — `schedules` already carries closing
+  spread/total and basic weather, enough for v1. Live odds movement is a v2
+  weekly-tool concern.
+- **Sleeper / Yahoo league data** (rosters, live draft state) — pulled by the
+  application layer at draft time, not stored here.
+
+## Refresh cadence
+
+nflverse regenerates the current season's releases within a day of each game.
+In-season: `python -m data.build --seasons <current>` weekly (Tue/Wed, after stat
+corrections settle). Historical seasons are stable — no need to re-pull them.
