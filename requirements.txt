@@ -1,0 +1,21 @@
+# Draft-sprint stack. Python 3.14 (WSL2 system) — all wheels resolve cleanly,
+# no 3.12 downgrade needed (see specifications/prereq-checklist.md).
+
+# data ingestion
+nflreadpy==0.1.5          # maintained nflverse client (serves current season)
+polars==1.44.1            # nflreadpy returns polars; converted to pandas at the boundary
+requests==2.34.2          # Sleeper API, ADP API
+
+# core
+pandas==3.0.5
+numpy==2.5.2
+pyarrow==25.0.1
+
+# modeling
+lightgbm==4.7.0
+scikit-learn==1.9.0      # IsotonicRegression (ADP→VBD), metrics
+scipy==1.18.1            # spearmanr
+
+# storage / dev
+sqlite-utils==4.2.1
+pytest==9.1.1

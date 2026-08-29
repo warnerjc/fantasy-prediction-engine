@@ -103,10 +103,9 @@ Tier tables: `pts_allow_0 / _1_6 / _7_13 / _14_20 / _21_27 / _28_34 / _35p` →
 
 TE premium: `bonus_rec_te` → `position_bonuses["TE"] = {rec: <pts>}`.
 
-**Not mapped (needs a play-by-play DST extractor that doesn't exist yet):**
-`st_fum_rec`, `st_ff`, `def_st_td`, `def_st_fum_rec`, `def_st_ff` — these are
-special-teams-vs-defense splits of events already covered by the plain `def_*` /
-`st_td` keys; mapping them now would double-count. TODO in `adapters.py`.
+**Not mapped:** `st_fum_rec`, `st_ff`, `def_st_td`, `def_st_fum_rec`, `def_st_ff`
+— special-teams-vs-defense splits of events the DST source (`load_team_stats`)
+only reports as combined totals; mapping them would double-count.
 
 ## Yahoo config → canonical (`normalize_yahoo`)
 
@@ -135,9 +134,10 @@ Yahoo API integration is deferred.
 Tier tables: `points_allowed_0 … _35_plus` → `dst_pts_allowed`;
 `yards_allowed_0_99 … _500_plus` → `dst_yds_allowed`.
 
-## nflverse `import_weekly_data` → canonical (`canonical_offense_stats`)
+## `player_week_stats` → canonical (`canonical_offense_stats`)
 
-Offense only. Kicking/DST stat lines need play-by-play (see `data/README.md`).
+Offense only. Kicking → `canonical_kicking_stats` (from `kicking_stats`); DST →
+`canonical_dst_stats` (from `team_defense_stats`). See `data/README.md`.
 
 | nflverse column | canonical | | nflverse column | canonical |
 |---|---|---|---|---|

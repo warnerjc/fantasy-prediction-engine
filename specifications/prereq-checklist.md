@@ -13,12 +13,15 @@ that's a real blocker is Python — flagged first.
 
 - [x] **Install `sqlite3` CLI** — done.
 - [x] Python 3.12 — **resolved: not needed.** Created `.venv` on WSL2's system Python 3.14.4
-      (Fri 2026-08-28) and `pip install`ed the full sprint stack — pandas 3.0.5, lightgbm 4.7.0,
-      scikit-learn 1.9.0, nfl_data_py 0.3.2, numpy 2.5.2, scipy 1.18.1, pyarrow 25.0.1,
-      fastparquet, sqlite-utils. All wheels resolved cleanly on 3.14, no source builds. The
-      wheel-availability worry didn't materialize; staying on 3.14 for the sprint venv. (The
-      post-sprint Docker image still pins 3.12 per the section below — revisit that too, since
-      3.14 now looks fine.)
+      (Fri 2026-08-28) and `pip install`ed the full sprint stack (see `requirements.txt`):
+      nflreadpy + polars, pandas 3.0.5, lightgbm 4.7.0, scikit-learn 1.9.0, numpy, scipy,
+      pyarrow, sqlite-utils. All wheels resolved cleanly on 3.14, no source builds. The
+      wheel-availability worry didn't materialize; staying on 3.14. (Docker image still pins
+      3.12 below — revisit, 3.14 looks fine.)
+    - **Data-lib note:** started on `nfl_data_py` (already installed), switched to **`nflreadpy`**
+      when `nfl_data_py 0.3.2`'s `import_weekly_data` couldn't fetch the 2025 season (stale
+      release URL). `nflreadpy` serves it and is the maintained client. `/data` is the only
+      layer that touched either.
 
 ## Repo location
 

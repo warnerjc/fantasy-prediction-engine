@@ -1,9 +1,16 @@
-"""nflverse pulls, each returned at the grain its target table expects.
+"""nflverse pulls (via ``nflreadpy``), each returned at the grain its target
+table expects.
+
+``nflreadpy`` is the maintained nflverse Python client — unlike the older
+``nfl_data_py`` it serves the current season's ``player_stats`` / ``team_stats``
+releases (which now also carry kicker FG-by-distance and team-defense box scores
+natively, so no play-by-play aggregation is needed). It returns polars frames;
+everything here converts to pandas at the boundary.
 
 Source cadence: nflverse regenerates the current season's releases within a day
 of each game and applies stat corrections for ~2 weeks after. Historical seasons
-are stable. All pulls here are therefore safe to re-run; ``data.db.upsert``
-handles the overwrite.
+are stable. All pulls here are safe to re-run; ``data.db.upsert`` handles the
+overwrite.
 """
 
 from __future__ import annotations
@@ -11,45 +18,60 @@ from __future__ import annotations
 import warnings
 from typing import Iterable
 
-import nfl_data_py as nfl
+import nflreadpy as nr
 import numpy as np
 import pandas as pd
 
-# columns from import_weekly_data we deliberately do NOT land in player_week_stats
+# player_stats columns we deliberately do NOT land in player_week_stats
 _WEEKLY_DROP = {"player_name", "headshot_url", "position_group"}
-# ...everything else is kept: raw counts + nflverse-provided rates (target_share,
-# air_yards_share, wopr, racr, pacr, dakota, *_epa). Rates are cheap to store and
-# a feature may want them; recomputing target_share etc. is a feature concern.
+_OFFENSE_POS = {"QB", "RB", "WR", "TE", "FB"}
 
 
 def _seasons(seasons: Iterable[int]) -> list[int]:
     return sorted({int(s) for s in seasons})
 
 
-def weekly_player_stats(seasons: Iterable[int]) -> pd.DataFrame:
-    """Offensive box-score production, one row per (player, season, week, season_type).
-
-    This is the feed for `player_week_stats` — the source of truth. `recent_team`
-    is renamed `team`; `opponent_team` -> `opponent`.
-    """
+def _load(loader: str, seasons: Iterable[int] | None = None) -> pd.DataFrame:
+    fn = getattr(nr, loader)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        df = nfl.import_weekly_data(_seasons(seasons), downcast=True)
+        out = fn(seasons=_seasons(seasons)) if seasons is not None else fn()
+    return out.to_pandas() if hasattr(out, "to_pandas") else out
 
+
+def player_stats(seasons: Iterable[int]) -> pd.DataFrame:
+    """Raw `load_player_stats` (all positions + kickers). Pulled once per build and
+    fed to `weekly_player_stats` and `kicking_stats`."""
+    return _load("load_player_stats", seasons)
+
+
+def team_stats(seasons: Iterable[int]) -> pd.DataFrame:
+    """Raw `load_team_stats` — team-week box score incl. `def_*` for DST."""
+    return _load("load_team_stats", seasons)
+
+
+def weekly_player_stats(player_stats_df: pd.DataFrame) -> pd.DataFrame:
+    """Offensive box-score production, one row per (player, season, week, season_type).
+
+    Feed for `player_week_stats` — the source of truth. Renamed to keep the
+    historical column names: `opponent_team`->`opponent`,
+    `passing_interceptions`->`interceptions`, `sacks_suffered`->`sacks`.
+    """
+    df = player_stats_df[player_stats_df["position"].isin(_OFFENSE_POS)].copy()
     df = df.drop(columns=[c for c in _WEEKLY_DROP if c in df.columns])
-    df = df.rename(columns={"recent_team": "team", "opponent_team": "opponent"})
+    df = df.rename(columns={
+        "opponent_team": "opponent",
+        "passing_interceptions": "interceptions",
+        "sacks_suffered": "sacks",
+    })
     df["season_type"] = df["season_type"].fillna("REG")
     return df.reset_index(drop=True)
 
 
 def snap_counts(seasons: Iterable[int], crosswalk: pd.DataFrame | None = None) -> pd.DataFrame:
     """Weekly snap counts/pcts. Keyed by `pfr_player_id`; `gsis_id` attached via
-    the crosswalk so downstream joins to `player_week_stats` are ID-based, not
-    name-based."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        df = nfl.import_snap_counts(_seasons(seasons))
-
+    the crosswalk so downstream joins are ID-based, not name-based."""
+    df = _load("load_snap_counts", seasons)
     if crosswalk is None:
         crosswalk = player_ids()
     xwalk = (
@@ -60,48 +82,35 @@ def snap_counts(seasons: Iterable[int], crosswalk: pd.DataFrame | None = None) -
     )
     df = df.merge(xwalk, on="pfr_player_id", how="left")
     if df.duplicated(["pfr_player_id", "season", "week", "game_type", "team"]).any():
-        raise AssertionError("snap_counts still fanned out after 1:1 crosswalk merge")
+        raise AssertionError("snap_counts fanned out after 1:1 crosswalk merge")
     return df.reset_index(drop=True)
 
 
 def injuries(seasons: Iterable[int]) -> pd.DataFrame:
-    """Weekly injury reports, keyed by `gsis_id` (matches player_week_stats.player_id)."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        df = nfl.import_injuries(_seasons(seasons))
+    """Weekly injury reports, keyed by `gsis_id`."""
+    df = _load("load_injuries", seasons)
     df["game_type"] = df["game_type"].fillna("REG")
-    # A report gets re-issued within a week (Questionable -> Out); keep the latest.
     pk = ["gsis_id", "season", "week", "game_type", "team"]
-    df = (
-        df.sort_values("date_modified")
-        .drop_duplicates(pk, keep="last")
-        .reset_index(drop=True)
-    )
-    return df
+    sort_col = "date_modified" if "date_modified" in df.columns else None
+    if sort_col:
+        df = df.sort_values(sort_col)
+    # a report gets re-issued within a week (Questionable -> Out); keep the latest
+    return df.drop_duplicates(pk, keep="last").reset_index(drop=True)
 
 
 def schedules(seasons: Iterable[int]) -> pd.DataFrame:
-    """Raw game rows — one per game. Carries rest days, roof/surface/weather, and
-    the closing Vegas spread/total used to derive team implied points."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        df = nfl.import_schedules(_seasons(seasons))
-    return df.reset_index(drop=True)
+    """Raw game rows — rest days, roof/surface/weather, closing spread/total."""
+    return _load("load_schedules", seasons).reset_index(drop=True)
 
 
 def team_week(schedules_df: pd.DataFrame) -> pd.DataFrame:
     """Explode `schedules` to one row per (season, week, game_type, team) with the
-    pre-game-known context a feature can use without leakage: opponent, home/away,
-    rest days, div game, roof/surface/weather, and the Vegas implied team total.
-
-    Implied total: `total_line/2` split by `spread_line` (nflverse convention:
-    positive spread_line = home favored), so favored teams get the higher total.
-    """
+    pre-game-known context a feature can use without leakage. Implied total:
+    `total_line/2` split by `spread_line` (positive = home favored)."""
     s = schedules_df
     common = s[["game_id", "season", "week", "game_type", "gameday", "weekday",
                 "gametime", "roof", "surface", "temp", "wind", "div_game",
                 "spread_line", "total_line"]].copy()
-
     half_total = common["total_line"] / 2
     half_spread = common["spread_line"] / 2
 
@@ -121,122 +130,98 @@ def team_week(schedules_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def seasonal_rosters(seasons: Iterable[int]) -> pd.DataFrame:
-    """One row per (player_id, season): the player's team for that season, plus
-    status / experience. Team here is pre-Week-1-known (free agency & trades
-    settle in the offseason), so `changed_team` derived from it is not leakage."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        df = nfl.import_seasonal_rosters(_seasons(seasons))
-    keep = ["player_id", "season", "team", "position", "status", "years_exp",
-            "entry_year", "rookie_year"]
+    """One row per (player_id, season): the player's team + status/experience.
+    Team is pre-Week-1-known, so `changed_team` derived from it is not leakage."""
+    df = _load("load_rosters", seasons).rename(columns={"gsis_id": "player_id"})
+    keep = ["player_id", "season", "team", "position", "status", "years_exp", "entry_year"]
     df = df[[c for c in keep if c in df.columns]]
     return df.dropna(subset=["player_id"]).drop_duplicates(["player_id", "season"]).reset_index(drop=True)
 
 
-def play_by_play(seasons: Iterable[int]) -> pd.DataFrame:
-    """Raw play-by-play. Large (~50k rows/season x ~400 cols) — pulled once per
-    build and fed to the derived-stat functions below, not stored whole."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        return nfl.import_pbp_data(_seasons(seasons), downcast=True)
+# --- kicker & team-defense: native in nflreadpy's stat releases -------------
+
+_FG_MADE = ["fg_made_0_19", "fg_made_20_29", "fg_made_30_39", "fg_made_40_49"]
+_FG_MISS = ["fg_missed_0_19", "fg_missed_20_29", "fg_missed_30_39", "fg_missed_40_49"]
 
 
-_FG_BUCKETS = [(0, 19, "0_19"), (20, 29, "20_29"), (30, 39, "30_39"),
-               (40, 49, "40_49"), (50, 99, "50p")]
+def kicking_stats(player_stats_df: pd.DataFrame) -> pd.DataFrame:
+    """Weekly kicker lines from the `load_player_stats` frame (FG-by-distance is
+    native). Keyed `(kicker_player_id, season, week, game_type, team)`."""
+    k = player_stats_df[player_stats_df["position"] == "K"].copy()
+    for c in _FG_MADE + _FG_MISS + ["fg_made", "fg_missed", "fg_made_distance",
+                                    "fg_made_50_59", "fg_made_60_",
+                                    "fg_missed_50_59", "fg_missed_60_",
+                                    "pat_made", "pat_missed"]:
+        k[c] = pd.to_numeric(k[c], errors="coerce").fillna(0) if c in k.columns else 0
 
-
-def _fg_bucket(distance: pd.Series) -> pd.Series:
-    out = pd.Series(pd.NA, index=distance.index, dtype="object")
-    for lo, hi, label in _FG_BUCKETS:
-        out = out.mask(distance.between(lo, hi), label)
-    return out
-
-
-def kicking_stats(pbp: pd.DataFrame) -> pd.DataFrame:
-    """Weekly kicker lines from PBP: FG made/missed by distance bucket, XP made/missed.
-    Keyed `(kicker_player_id, season, week, game_type, team)` — `kicker_player_id`
-    is a gsis id, joins straight to `player_week_stats.player_id`."""
-    fg = pbp[pbp["field_goal_attempt"] == 1].copy()
-    fg["bucket"] = _fg_bucket(fg["kick_distance"])
-    fg["made"] = fg["field_goal_result"].eq("made")
-    fg = fg.dropna(subset=["kicker_player_id", "bucket"])
-
-    rows = []
-    key = ["season", "week", "season_type", "posteam", "kicker_player_id"]
-    for keyvals, g in fg.groupby(key, dropna=False):
-        rec = dict(zip(key, keyvals))
-        rec["fg_made"] = int(g["made"].sum())
-        rec["fg_missed"] = int((~g["made"]).sum())
-        rec["fg_made_yds"] = float(g.loc[g["made"], "kick_distance"].sum())
-        for _, _, label in _FG_BUCKETS:
-            b = g[g["bucket"] == label]
-            rec[f"fg_made_{label}"] = int(b["made"].sum())
-            rec[f"fg_missed_{label}"] = int((~b["made"]).sum())
-        rows.append(rec)
-    fg_wk = pd.DataFrame(rows)
-
-    xp = pbp[pbp["extra_point_attempt"] == 1].copy()
-    xp = xp.dropna(subset=["kicker_player_id"])
-    xp["good"] = xp["extra_point_result"].eq("good")
-    xp_wk = (
-        xp.groupby(key, dropna=False)
-        .agg(xp_made=("good", "sum"), xp_missed=("good", lambda s: (~s).sum()))
-        .reset_index()
-    )
-
-    out = fg_wk.merge(xp_wk, on=key, how="outer")
-    out = out.rename(columns={"season_type": "game_type", "posteam": "team"})
-    num = [c for c in out.columns if c not in ("season", "week", "game_type", "team", "kicker_player_id")]
-    out[num] = out[num].fillna(0)
+    out = pd.DataFrame({
+        "kicker_player_id": k["player_id"].values,
+        "season": k["season"].values, "week": k["week"].values,
+        "game_type": k["season_type"].fillna("REG").values,
+        "team": k["team"].values,
+        "fg_made": k["fg_made"].values,
+        "fg_missed": k["fg_missed"].values,
+        "fg_made_yds": k["fg_made_distance"].values,
+        "fg_made_50p": (k["fg_made_50_59"] + k["fg_made_60_"]).values,
+        "fg_missed_50p": (k["fg_missed_50_59"] + k["fg_missed_60_"]).values,
+        "xp_made": k["pat_made"].values,
+        "xp_missed": k["pat_missed"].values,
+    })
+    for c in _FG_MADE + _FG_MISS:
+        out[c] = k[c].values
     return out.reset_index(drop=True)
 
 
-def team_defense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
-    """Weekly team-defense lines from PBP: sacks, takeaways, defensive/return TDs,
-    safeties, blocked kicks, points & yards allowed. Keyed
-    `(defense_team, season, week, game_type)`. Covers ~all standard DST scoring;
-    4th-down stops and defensive 2pt returns are omitted (rare / low value)."""
-    p = pbp[pbp["defteam"].notna()].copy()
-    key = ["season", "week", "season_type", "defteam"]
+def team_defense_stats(team_stats: pd.DataFrame, schedules_df: pd.DataFrame) -> pd.DataFrame:
+    """Weekly team-defense lines. `def_*` box score from `load_team_stats`; yards
+    allowed = the opponent's offensive yards in that game; points allowed = the
+    opponent's final score. Keyed `(defense_team, season, week, game_type)`."""
+    ts = team_stats.copy()
+    for c in ("passing_yards", "rushing_yards", "def_sacks", "def_interceptions",
+              "def_fumbles", "def_safeties", "def_tds", "def_fg_blocks",
+              "def_pat_blocks", "def_punt_blocks"):
+        ts[c] = pd.to_numeric(ts.get(c), errors="coerce").fillna(0)
+    ts["off_yards"] = ts["passing_yards"] + ts["rushing_yards"]
 
-    agg = p.groupby(key, dropna=False).agg(
-        dst_sack=("sack", "sum"),
-        dst_int=("interception", "sum"),
-        dst_fum_rec=("fumble_lost", "sum"),      # offense lost it => defense recovered
-        dst_safety=("safety", "sum"),
-        dst_yds_allowed=("yards_gained", "sum"),
-    ).reset_index()
+    out = pd.DataFrame({
+        "season": ts["season"], "week": ts["week"],
+        "game_type": ts["season_type"].fillna("REG"),
+        "defense_team": ts["team"], "game_id": ts["game_id"],
+        "opponent_team": ts["opponent_team"],
+        "dst_sack": ts["def_sacks"], "dst_int": ts["def_interceptions"],
+        "dst_fum_rec": ts["def_fumbles"], "dst_safety": ts["def_safeties"],
+        "dst_td": ts["def_tds"],
+        "dst_blk_kick": ts["def_fg_blocks"] + ts["def_pat_blocks"] + ts["def_punt_blocks"],
+    })
 
-    # TDs scored by the team while on defense (INT/fumble return + punt/KO return)
-    td = p[(p["touchdown"] == 1) & (p["td_team"] == p["defteam"])]
-    td_wk = td.groupby(key, dropna=False).size().rename("dst_td").reset_index()
+    # yards allowed: opponent's offensive yards in the same game
+    opp_yards = ts[["game_id", "team", "off_yards"]].rename(
+        columns={"team": "opponent_team", "off_yards": "dst_yds_allowed"})
+    out = out.merge(opp_yards, on=["game_id", "opponent_team"], how="left")
 
-    blk = p[p["field_goal_result"].eq("blocked") | p["extra_point_result"].eq("blocked")]
-    blk_wk = blk.groupby(key, dropna=False).size().rename("dst_blk_kick").reset_index()
+    # points allowed: opponent's final score
+    sc = schedules_df
+    scores = pd.concat([
+        pd.DataFrame({"game_id": sc["game_id"], "defense_team": sc["home_team"],
+                      "dst_pts_allowed": sc["away_score"]}),
+        pd.DataFrame({"game_id": sc["game_id"], "defense_team": sc["away_team"],
+                      "dst_pts_allowed": sc["home_score"]}),
+    ])
+    out = out.merge(scores, on=["game_id", "defense_team"], how="left")
 
-    # points allowed: the defense's team conceded the opponent's final score
-    games = p.drop_duplicates(["game_id", "defteam"]).copy()
-    games["dst_pts_allowed"] = np.where(
-        games["defteam"] == games["home_team"], games["away_score"], games["home_score"]
-    )
-    pa_wk = games[key + ["dst_pts_allowed"]]
-
-    out = agg.merge(td_wk, on=key, how="left").merge(blk_wk, on=key, how="left").merge(pa_wk, on=key, how="left")
-    out = out.rename(columns={"season_type": "game_type", "defteam": "defense_team"})
-    fill = ["dst_td", "dst_blk_kick"]
-    out[fill] = out[fill].fillna(0)
     for c in ("dst_sack", "dst_int", "dst_fum_rec", "dst_safety", "dst_td", "dst_blk_kick"):
-        out[c] = out[c].astype(int)
-    return out.reset_index(drop=True)
+        out[c] = out[c].round().astype(int)
+    return (
+        out.drop(columns=["game_id", "opponent_team"])
+        .drop_duplicates(["defense_team", "season", "week", "game_type"])
+        .reset_index(drop=True)
+    )
 
 
 def player_ids() -> pd.DataFrame:
-    """Cross-reference table: gsis_id <-> pfr_id <-> sleeper_id <-> yahoo_id <-> espn_id.
-    From nflverse's maintained `import_ids` release — do not rebuild from names."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        df = nfl.import_ids()
-
+    """Cross-reference: gsis_id <-> pfr_id <-> sleeper_id <-> yahoo_id <-> espn_id.
+    From nflverse's maintained `load_ff_playerids` — do not rebuild from names."""
+    df = _load("load_ff_playerids")
     keep = ["gsis_id", "pfr_id", "sleeper_id", "yahoo_id", "espn_id", "mfl_id",
             "sportradar_id", "name", "merge_name", "position", "team", "birthdate",
             "draft_year", "draft_round", "draft_pick", "draft_ovr"]

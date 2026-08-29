@@ -48,10 +48,10 @@ _SLEEPER_PER_UNIT = {
     "fgmiss_30_39": K.K_FG_MISSED_30_39, "fgmiss_40_49": K.K_FG_MISSED_40_49,
     "fgmiss_50p": K.K_FG_MISSED_50P,
     # DST. Sleeper also exposes st_fum_rec / st_ff / def_st_* variants that are
-    # separate events from the plain def_* keys; splitting special-teams vs
-    # defensive recoveries needs a play-by-play DST extractor that doesn't exist
-    # yet, so those variants are intentionally NOT mapped here (TODO: revisit when
-    # /data lands DST stats). st_td stays -- a return TD is unambiguous.
+    # separate events from the plain def_* keys; the DST stat source
+    # (load_team_stats) reports combined totals (e.g. def_fumbles), not a
+    # special-teams-vs-defense split, so those variants are intentionally NOT
+    # mapped here. st_td stays -- a return TD is unambiguous.
     "sack": K.DST_SACK, "int": K.DST_INT, "fum_rec": K.DST_FUM_REC,
     "ff": K.DST_FF, "safe": K.DST_SAFETY, "blk_kick": K.DST_BLK_KICK,
     "def_td": K.DST_TD, "def_2pt": K.DST_2PT_RETURN, "st_td": K.DST_RET_TD,

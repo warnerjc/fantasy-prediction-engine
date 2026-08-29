@@ -68,7 +68,7 @@ Sits between the base model output and the application layer — not a retrained
 
 ## Immediate next step (in progress)
 
-Write the data pipeline script: pull `stats_player` (weekly) plus snap counts, injuries, and schedules via `nfl_data_py`, land them into the SQLite `player_week_stats` schema described above. Then build the v1 season-grain model on top.
+Write the data pipeline script: pull weekly player stats plus snap counts, injuries, and schedules via `nflreadpy` (the maintained nflverse client — `nfl_data_py` can't fetch the current season), land them into the SQLite `player_week_stats` schema described above. Then build the v1 season-grain model on top.
 
 ## User context
 - Building for own use in standard H2H Sleeper/Yahoo leagues (13/14/15-week seasons).

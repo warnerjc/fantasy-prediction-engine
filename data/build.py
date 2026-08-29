@@ -45,7 +45,11 @@ def build(seasons: list[int], db_path=DB_PATH) -> dict[str, int]:
 
         xwalk = nflverse.player_ids()
         step("player_ids", xwalk)
-        step("player_week_stats", nflverse.weekly_player_stats(seasons))
+
+        pstats = nflverse.player_stats(seasons)
+        step("player_week_stats", nflverse.weekly_player_stats(pstats))
+        step("kicking_stats", nflverse.kicking_stats(pstats))
+
         step("snap_counts", nflverse.snap_counts(seasons, crosswalk=xwalk))
         step("injuries", nflverse.injuries(seasons))
         step("seasonal_rosters", nflverse.seasonal_rosters(seasons))
@@ -54,10 +58,8 @@ def build(seasons: list[int], db_path=DB_PATH) -> dict[str, int]:
         step("schedules", sched)
         step("team_week", nflverse.team_week(sched))
 
-        print("  pulling play-by-play (large)...")
-        pbp = nflverse.play_by_play(seasons)
-        step("kicking_stats", nflverse.kicking_stats(pbp))
-        step("team_defense_stats", nflverse.team_defense_stats(pbp))
+        step("team_defense_stats",
+             nflverse.team_defense_stats(nflverse.team_stats(seasons), sched))
 
         _sanity(conn)
         return counts

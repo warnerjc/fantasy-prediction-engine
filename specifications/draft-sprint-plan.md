@@ -85,10 +85,14 @@ requirement for "done."
 *(Note: the initial repo scaffold + a first-pass `/scoring` were done in a separate
 Copilot session; reviewed and largely rebuilt here.)*
 
-- [x] **venv on Python 3.14.4** — full sprint stack (`pandas` 3.0.5, `lightgbm` 4.7.0,
-  `scikit-learn` 1.9.0, `nfl_data_py` 0.3.2, `numpy`, `scipy`, `pyarrow`, `fastparquet`,
-  `sqlite-utils`) installs cleanly, all wheels, no source builds. **3.12 fallback not needed**
-  — `prereq-checklist.md` updated. (Docker image still says pin 3.12; revisit, 3.14 looks fine.)
+- [x] **venv on Python 3.14.4** — full sprint stack (see `requirements.txt`) installs cleanly,
+  all wheels, no source builds. **3.12 fallback not needed** — `prereq-checklist.md` updated.
+- [x] **Data lib: `nflreadpy`, not `nfl_data_py`.** Started on `nfl_data_py` 0.3.2 (already
+  installed) — but its `import_weekly_data` **can't fetch the 2025 season** (404, stale
+  release), which would have shipped a tool that projects the *wrong year*. Migrated `/data`
+  to `nflreadpy` (maintained client; also serves kicker FG buckets + team-defense box scores
+  natively → no play-by-play pull). Everything downstream reads SQLite, so blast radius = 1
+  file. Caught before the draft.
 - [x] **`/scoring` rebuilt** around a canonical stat vocabulary + platform adapters
   (`normalize_sleeper` / `normalize_yahoo`), not a hand-typed key guess. Handles half/full/no
   PPR, 4-vs-6pt pass TD, Sleeper yardage-threshold bonuses, kicker distance buckets, DST
@@ -96,15 +100,13 @@ Copilot session; reviewed and largely rebuilt here.)*
   under **both** sprint leagues; 25 tests. Full mapping tables in `scoring/README.md`.
   Deferred: Sleeper `st_fum_rec` / `def_st_*` DST split (needs the PBP DST extractor;
   would double-count otherwise — TODO in `adapters.py`).
-- [x] **`/data` pipeline** — `python -m data.build --seasons 2015-2024` lands six tables:
-  `player_week_stats` (54.5k rows, weekly grain, the source of truth), `snap_counts`,
-  `injuries`, `schedules` + derived `team_week` (opponent / home-away / rest / **Vegas implied
-  team total**), and the `player_ids` gsis↔pfr↔sleeper↔yahoo crosswalk. Idempotent
-  INSERT-OR-REPLACE on each table's PK (absorbs nflverse stat corrections). Real dupe hazards
-  found + handled (PFR reuses some player ids across two people; injury reports get re-issued
-  mid-week). 7 tests. Schema doc in `data/README.md`.
-  **Not landed (post-sprint, per scope above):** play-by-play → red-zone touches, kicker
-  FG-by-distance, DST stat lines; external Vegas/weather APIs.
+- [x] **`/data` pipeline** — `python -m data.build --seasons 2015-2025` (~30s) lands nine
+  tables: `player_week_stats` (66k rows, weekly grain, source of truth), `kicking_stats` +
+  `team_defense_stats` (native from nflreadpy's stat releases), `snap_counts`, `injuries`,
+  `seasonal_rosters`, `schedules` + derived `team_week` (Vegas implied team total), and the
+  `player_ids` crosswalk. Idempotent INSERT-OR-REPLACE per PK. Dupe hazards found + handled
+  (PFR reuses some player ids; injury reports re-issued mid-week). 11 tests. `data/README.md`.
+  **Not landed:** red-zone / route-level play-by-play; external Vegas/weather APIs.
 - [x] **`/features`** — `window.py` engine (`AsOf` + `Window.prior_season()` / `.trailing()`,
   `visible_weeks()` does leakage filtering once). Functions: `opportunity_features` (usage
   totals/rates, target/rush/air-yards share, WOPR), `snap_features`, `opponent_allowed_features`

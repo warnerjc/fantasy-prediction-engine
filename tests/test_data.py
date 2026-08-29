@@ -91,42 +91,38 @@ def test_every_registered_table_has_pk():
         assert pk and all(isinstance(c, str) for c in pk)
 
 
-def _pbp_fg(dist, result, kicker="00-k1", team="GB", wk=1):
-    return dict(season=2023, week=wk, season_type="REG", posteam=team, defteam="CHI",
-                game_id=f"2023_0{wk}_CHI_GB", home_team="GB", away_team="CHI",
-                home_score=24, away_score=17,
-                field_goal_attempt=1, extra_point_attempt=0, kick_distance=dist,
-                field_goal_result=result, extra_point_result=None,
-                kicker_player_id=kicker, touchdown=0, td_team=None,
-                sack=0, interception=0, fumble_lost=0, safety=0, yards_gained=0)
-
-
-def test_kicking_stats_buckets_makes_and_misses_by_distance():
-    pbp = pd.DataFrame([
-        _pbp_fg(25, "made"), _pbp_fg(45, "made"), _pbp_fg(52, "made"),
-        _pbp_fg(48, "missed"), _pbp_fg(55, "blocked"),
-    ])
-    k = kicking_stats(pbp).iloc[0]
+def test_kicking_stats_from_player_stats_maps_and_combines_50plus():
+    ps = pd.DataFrame([{
+        "position": "K", "player_id": "00-k1", "season": 2024, "week": 1,
+        "season_type": "REG", "team": "GB",
+        "fg_made": 3, "fg_missed": 2, "fg_made_distance": 122,
+        "fg_made_20_29": 1, "fg_made_40_49": 1, "fg_made_50_59": 1, "fg_made_60_": 0,
+        "fg_missed_40_49": 1, "fg_missed_50_59": 0, "fg_missed_60_": 1,
+        "pat_made": 3, "pat_missed": 0,
+    }])
+    k = kicking_stats(ps).iloc[0]
     assert k["fg_made"] == 3 and k["fg_missed"] == 2
-    assert k["fg_made_20_29"] == 1 and k["fg_made_40_49"] == 1 and k["fg_made_50p"] == 1
-    assert k["fg_missed_40_49"] == 1 and k["fg_missed_50p"] == 1   # blocked counts as missed
-    assert k["fg_made_yds"] == 25 + 45 + 52
+    assert k["fg_made_50p"] == 1 and k["fg_missed_50p"] == 1     # 50_59 + 60_ combined
+    assert k["fg_made_yds"] == 122 and k["xp_made"] == 3
+    assert k["kicker_player_id"] == "00-k1" and k["game_type"] == "REG"
 
 
-def test_team_defense_stats_aggregates_and_points_allowed():
-    rows = []
-    for _ in range(3):
-        rows.append(dict(season=2023, week=1, season_type="REG", game_id="2023_01_CHI_GB",
-                         home_team="GB", away_team="CHI", home_score=24, away_score=17,
-                         posteam="CHI", defteam="GB", sack=1, interception=0, fumble_lost=0,
-                         safety=0, yards_gained=5, touchdown=0, td_team=None,
-                         field_goal_result=None, extra_point_result=None))
-    rows.append({**rows[0], "sack": 0, "interception": 1, "touchdown": 1,
-                 "td_team": "GB", "yards_gained": 30})
-    d = team_defense_stats(pd.DataFrame(rows))
-    gb = d[d["defense_team"] == "GB"].iloc[0]
-    assert gb["dst_sack"] == 3
-    assert gb["dst_int"] == 1
-    assert gb["dst_td"] == 1
-    assert gb["dst_pts_allowed"] == 17          # GB (home) conceded away_score
-    assert gb["dst_yds_allowed"] == 45
+def test_team_defense_stats_from_team_stats_and_schedules():
+    ts = pd.DataFrame([
+        dict(game_id="2024_01_CHI_GB", season=2024, week=1, season_type="REG",
+             team="GB", opponent_team="CHI", passing_yards=250, rushing_yards=120,
+             def_sacks=3, def_interceptions=1, def_fumbles=1, def_safeties=0,
+             def_tds=1, def_fg_blocks=0, def_pat_blocks=0, def_punt_blocks=1),
+        dict(game_id="2024_01_CHI_GB", season=2024, week=1, season_type="REG",
+             team="CHI", opponent_team="GB", passing_yards=180, rushing_yards=60,
+             def_sacks=2, def_interceptions=0, def_fumbles=0, def_safeties=0,
+             def_tds=0, def_fg_blocks=0, def_pat_blocks=0, def_punt_blocks=0),
+    ])
+    sched = pd.DataFrame([dict(game_id="2024_01_CHI_GB", home_team="GB", away_team="CHI",
+                               home_score=24, away_score=17)])
+    d = team_defense_stats(ts, sched).set_index("defense_team")
+    assert d.loc["GB", "dst_sack"] == 3
+    assert d.loc["GB", "dst_blk_kick"] == 1                     # punt block
+    assert d.loc["GB", "dst_pts_allowed"] == 17                 # CHI scored 17
+    assert d.loc["GB", "dst_yds_allowed"] == 240                # CHI offense 180 + 60
+    assert d.loc["CHI", "dst_pts_allowed"] == 24

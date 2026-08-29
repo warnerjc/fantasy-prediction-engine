@@ -4,10 +4,9 @@ The scoring function needs stats in the canonical vocabulary; nflverse gives us
 its own column names. This module is the stat-side mirror of ``scoring.adapters``
 (which does the same job for league settings).
 
-Offense (QB/RB/WR/TE) is covered from ``nfl.import_weekly_data``. Kicking and DST
-inputs are *not* in that release -- they require play-by-play aggregation and are
-landed by the ``/data`` pipeline; ``kicking_stats`` / ``dst_stats`` are declared
-here as the target shape so callers can code against them now.
+Offense comes from nflreadpy's ``load_player_stats``; kicking and team-defense
+lines come from the ``kicking_stats`` / ``team_defense_stats`` tables that
+``/data`` derives from ``load_player_stats`` (K rows) and ``load_team_stats``.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ _FUMBLE_LOST_COLS = ("rushing_fumbles_lost", "sack_fumbles_lost", "receiving_fum
 
 
 def canonical_offense_stats(weekly: pd.DataFrame) -> pd.DataFrame:
-    """Map an ``import_weekly_data`` frame to canonical stat columns.
+    """Map a ``player_week_stats`` frame to canonical stat columns.
 
     Returns a new frame with the identifier columns (``player_id``, ``season``,
     ``week``, ``position``, ``recent_team``, ``opponent_team`` when present) plus

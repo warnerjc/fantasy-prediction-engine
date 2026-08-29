@@ -2,7 +2,7 @@
 
 All pre-game-known. Strong for a season projection — draft capital and age carry
 the signal for ascending young players that last year's box score misses.
-Source: the ``player_ids`` crosswalk (nflverse ``import_ids``).
+Source: the ``player_ids`` crosswalk (nflverse ``load_ff_playerids``).
 """
 
 from __future__ import annotations
