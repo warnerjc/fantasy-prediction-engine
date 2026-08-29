@@ -19,6 +19,7 @@ import pandas as pd
 
 from models.leagues import CONFIG_DIR, LEAGUES
 from . import sleeper
+from .adp import adp_for_league
 from .board import build_board
 from .roster import roster_spec
 
@@ -26,7 +27,7 @@ pd.set_option("display.width", 200)
 pd.set_option("display.max_columns", 30)
 
 _LEAGUE_ID = {"sleeper": "1356741521163968513", "yahoo": "236625"}
-_COLS = ["overall_rank", "tier", "name", "position", "most_recent_team", "proj_ppg", "vbd"]
+_COLS = ["overall_rank", "tier", "name", "pos", "team", "proj_ppg", "adp", "vbd"]
 
 
 def _load_config(league: str) -> dict:
@@ -35,11 +36,19 @@ def _load_config(league: str) -> dict:
 
 
 def _fmt(df: pd.DataFrame) -> str:
-    show = df[[c for c in _COLS if c in df.columns]].copy()
-    for c in ("proj_ppg", "vbd"):
+    show = df.copy()
+    show["pos"] = show["position"]
+    show["team"] = show.get("most_recent_team")
+    if "is_rookie" in show:
+        show.loc[show["is_rookie"] == 1, "pos"] = show["pos"] + "*"      # * = rookie
+    show.loc[show.get("source") == "adp", "pos"] = show["pos"] + " (adp)"
+    if "tier" in show:
+        show["tier"] = show["tier"].astype("string").fillna("-")
+    show = show[[c for c in _COLS if c in show.columns]]
+    for c in ("proj_ppg", "vbd", "adp"):
         if c in show:
             show[c] = show[c].round(1)
-    return show.to_string(index=False)
+    return show.to_string(index=False, na_rep="-")
 
 
 def _render(board, state: dict | None, slot: int | None) -> None:
@@ -57,6 +66,12 @@ def _render(board, state: dict | None, slot: int | None) -> None:
             names = "  ".join(f"{r.name} ({r.proj_ppg:.1f})" for r in p.itertuples())
             print(f"  {pos:>4}  {names}")
 
+    rk = board.available
+    rk = rk[(rk.get("source") == "adp") | (rk.get("is_rookie") == 1)].sort_values("adp")
+    if not rk.empty:
+        print("\nNOT MODEL-PROJECTED (rookies / no prior NFL season) — placed by ADP\n")
+        print(_fmt(rk.head(15)))
+
     if slot and state:
         t = board.my_targets(slot, state["teams"], state["rounds"], state["next_pick_no"])
         if t["my_next_pick"]:
@@ -65,10 +80,29 @@ def _render(board, state: dict | None, slot: int | None) -> None:
             print(_fmt(t["likely_available"]).replace("\n", "\n  "))
 
 
-def run(league: str, slot: int | None, watch: bool, draft_id: str | None, interval: int) -> None:
+def _projection_season(league: str) -> int:
+    from .board import PROJECTIONS_DIR
+    df = pd.read_csv(PROJECTIONS_DIR / f"{league}_projections.csv", usecols=["target_season"])
+    return int(df["target_season"].iloc[0])
+
+
+def _build(league: str, spec, use_adp: bool, season: int | None):
+    adp = players = None
+    if use_adp:
+        season = season or _projection_season(league)
+        try:
+            adp = adp_for_league(league, spec.teams, season)
+            players = sleeper.all_players()
+        except Exception as e:
+            print(f"(ADP unavailable, model-only board: {e})")
+    return build_board(league, spec, adp=adp, sleeper_players=players)
+
+
+def run(league: str, slot: int | None, watch: bool, draft_id: str | None,
+        interval: int, use_adp: bool, season: int | None) -> None:
     cfg = _load_config(league)
     spec = roster_spec(cfg)
-    board = build_board(league, spec)
+    board = _build(league, spec, use_adp, season)
     print(f"{league}: {spec.teams} teams, replacement ranks {spec.replacement_rank()}")
 
     if league == "yahoo" or not watch:
@@ -111,8 +145,11 @@ def main() -> None:
     ap.add_argument("--watch", action="store_true", help="poll live Sleeper draft state")
     ap.add_argument("--draft", default=None, help="Sleeper draft id (default: look up from league)")
     ap.add_argument("--interval", type=int, default=15, help="poll seconds when --watch")
+    ap.add_argument("--no-adp", action="store_true", help="model-only board, skip ADP fetch")
+    ap.add_argument("--season", type=int, default=None, help="ADP season (default: this year)")
     args = ap.parse_args()
-    run(args.league, args.slot, args.watch, args.draft, args.interval)
+    run(args.league, args.slot, args.watch, args.draft, args.interval,
+        not args.no_adp, args.season)
 
 
 if __name__ == "__main__":

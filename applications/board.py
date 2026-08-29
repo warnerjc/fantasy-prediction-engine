@@ -12,8 +12,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.isotonic import IsotonicRegression
 
 from data.db import read_sql
+from .adp import normalize_name
 from .roster import RosterSpec, SCORABLE
 
 PROJECTIONS_DIR = Path(__file__).resolve().parents[1] / "models" / "output"
@@ -67,10 +69,10 @@ class DraftBoard:
 
 
 def _assign_tiers(df: pd.DataFrame) -> pd.Series:
-    tiers = pd.Series(1, index=df.index, dtype=int)
+    tiers = pd.Series(pd.NA, index=df.index, dtype="Int64")
     for pos, grp in df.groupby("position"):
         gap = _TIER_GAP.get(pos, 1.0)
-        ordered = grp.sort_values("proj_ppg", ascending=False)
+        ordered = grp[grp["proj_ppg"].notna()].sort_values("proj_ppg", ascending=False)
         t, prev = 1, None
         for idx, ppg in ordered["proj_ppg"].items():
             if prev is not None and prev - ppg > gap:
@@ -80,7 +82,61 @@ def _assign_tiers(df: pd.DataFrame) -> pd.Series:
     return tiers
 
 
-def build_board(league: str, spec: RosterSpec, projections_dir: Path = PROJECTIONS_DIR) -> DraftBoard:
+def _attach_adp(proj: pd.DataFrame, adp: pd.DataFrame) -> pd.DataFrame:
+    proj = proj.copy()
+    proj["norm_name"] = proj["name"].map(normalize_name)
+    if adp is None or adp.empty:
+        proj["adp"] = np.nan
+        return proj.drop(columns=["norm_name"])
+    key = adp[["norm_name", "position", "adp"]].drop_duplicates(["norm_name", "position"])
+    proj = proj.merge(key, on=["norm_name", "position"], how="left")
+    return proj.drop(columns=["norm_name"])
+
+
+def _unprojected_from_adp(proj, adp, sleeper_players, max_adp) -> pd.DataFrame:
+    """Rows for ADP players with no model projection (rookies / missing season),
+    VBD imputed from ADP by isotonic regression on players who have both."""
+    if adp is None or adp.empty:
+        return pd.DataFrame()
+    have = set(zip(proj["name"].map(normalize_name), proj["position"]))
+    matched = pd.Series(
+        [(n, p) in have for n, p in zip(adp["norm_name"], adp["position"])],
+        index=adp.index,
+    )
+    # only offense — K/DEF name matching to ADP is unreliable and they're low-stakes
+    miss = adp[~matched & adp["position"].isin(("QB", "RB", "WR", "TE"))
+               & (adp["adp"] <= max_adp)].copy()
+    fit = proj.dropna(subset=["adp", "vbd"])
+    if miss.empty or len(fit) < 10:
+        return pd.DataFrame()
+
+    iso = IsotonicRegression(increasing=False, out_of_bounds="clip").fit(fit["adp"], fit["vbd"])
+    out = pd.DataFrame({
+        "name": miss["name"].values,
+        "position": miss["position"].values,
+        "most_recent_team": miss["team"].values,
+        "player_id": "adp:" + miss["name"].str.replace(r"\s+", "_", regex=True),
+        "proj_ppg": np.nan, "proj_points": np.nan,
+        "adp": miss["adp"].values,
+        "vbd": iso.predict(miss["adp"].values),
+        "source": "adp",
+    })
+    if sleeper_players is not None and not sleeper_players.empty:
+        sp = sleeper_players.drop_duplicates(["norm_name", "position"])
+        out["norm_name"] = out["name"].map(normalize_name)
+        out = out.merge(sp[["norm_name", "position", "sleeper_id", "is_rookie"]],
+                        on=["norm_name", "position"], how="left").drop(columns=["norm_name"])
+    return out
+
+
+def build_board(
+    league: str,
+    spec: RosterSpec,
+    projections_dir: Path = PROJECTIONS_DIR,
+    adp: pd.DataFrame | None = None,
+    sleeper_players: pd.DataFrame | None = None,
+    max_adp: int = 180,
+) -> DraftBoard:
     proj = pd.read_csv(projections_dir / f"{league}_projections.csv")
     proj = proj[proj["position"].isin(SCORABLE)].copy()
 
@@ -88,18 +144,25 @@ def build_board(league: str, spec: RosterSpec, projections_dir: Path = PROJECTIO
     proj = proj.merge(xref, on="player_id", how="left")
     # DEF rows carry the team abbrev as player_id; Sleeper uses that as its DEF id
     proj["sleeper_id"] = proj["sleeper_id"].fillna(proj["player_id"]).astype(str)
+    proj["source"] = "model"
 
     repl_rank = spec.replacement_rank()
-    proj["pos_rank"] = proj.groupby("position")["proj_points"].rank(ascending=False, method="first")
     replacement_points = {}
     for pos in SCORABLE:
         pool = proj[proj["position"] == pos].sort_values("proj_points", ascending=False)
         r = min(repl_rank.get(pos, len(pool)), len(pool))
         replacement_points[pos] = float(pool["proj_points"].iloc[r - 1]) if r else 0.0
-
     proj["replacement_points"] = proj["position"].map(replacement_points)
     proj["vbd"] = proj["proj_points"] - proj["replacement_points"]
-    proj["tier"] = _assign_tiers(proj)
-    proj["overall_rank"] = proj["vbd"].rank(ascending=False, method="first").astype(int)
 
-    return DraftBoard(proj.sort_values("vbd", ascending=False).reset_index(drop=True), spec, set())
+    proj = _attach_adp(proj, adp)
+    extra = _unprojected_from_adp(proj, adp, sleeper_players, max_adp)
+    board = pd.concat([proj, extra], ignore_index=True) if not extra.empty else proj
+
+    board["is_rookie"] = board.get("is_rookie", 0)
+    board["is_rookie"] = board["is_rookie"].fillna(0).astype(int)
+    board["sleeper_id"] = board["sleeper_id"].astype("string")
+    board["tier"] = _assign_tiers(board)
+    board["overall_rank"] = board["vbd"].rank(ascending=False, method="first").astype(int)
+
+    return DraftBoard(board.sort_values("vbd", ascending=False).reset_index(drop=True), spec, set())

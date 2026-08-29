@@ -17,6 +17,8 @@ python -m applications.draft_tool --league yahoo               # static board, o
 | `--slot N` | your draft position (1 = first overall) → "your next pick" targeting |
 | `--watch` | poll live Sleeper draft state every `--interval` s (default 15), re-render on each new pick |
 | `--draft <id>` | Sleeper draft id (default: looked up from the league) |
+| `--no-adp` | model-only board, skip the ADP fetch |
+| `--season` | ADP season (default: the projections' target season) |
 
 Auction drafts are **not** supported — different logic (budget pacing, not
 positional scarcity). `run()` is where that would branch.
@@ -41,6 +43,15 @@ positional scarcity). `run()` is where that would branch.
 4. **Your next pick.** With `--slot`, computes your snake pick numbers and, by
    assuming picks come off the top of the board, splits the board into "likely
    gone" vs "likely there for you."
+5. **Rookies / unprojected players.** The model can't project anyone with no
+   prior NFL season. `adp.py` pulls crowd ADP (fantasyfootballcalculator.com,
+   public API, disk-cached with a TTL), and `board.py` places every unmatched
+   top-180 ADP player on the board at a VBD **imputed from ADP** — isotonic
+   regression on the players who have both a projection and an ADP. Those rows
+   are tagged `(adp)` with no `proj_ppg`, and also listed in their own section.
+   The `adp` column is shown for *every* player, so model-vs-market gaps (value
+   or reach) are visible at a glance. Sleeper ids for these rows come from the
+   cached Sleeper player directory, so they still drop off when drafted.
 
 ### Consuming the prediction shape
 
@@ -51,8 +62,10 @@ quantiles, `proj_p10`/`proj_p90` columns already ride through
 
 ### Known gaps
 
-- **Rookies** aren't in the projections (no prior NFL season) — they won't appear
-  on the board at all. Cross-check a rookie ADP list for the early rounds.
-- **VBD baselines are heuristic** (no ADP data). They're a `roster.py` constant,
-  easy to adjust after a mock draft.
+- **Rookie values are pure ADP**, not a model view — imputed from where the crowd
+  drafts them. Fine for slotting; no independent signal.
+- **VBD baselines are heuristic** (`_BASELINE_MULT` / flex splits in `roster.py`).
+  Easy to adjust after a mock draft.
+- ADP format is the closest FFC preset to each league (`half-ppr` / `ppr`), not an
+  exact scoring match.
 - Auction, and the weekly start/sit tool, are later.

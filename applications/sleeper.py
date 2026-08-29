@@ -7,16 +7,50 @@ the tool polls this.
 
 from __future__ import annotations
 
+import json
+import time
+from pathlib import Path
+
+import pandas as pd
 import requests
 
 BASE = "https://api.sleeper.app/v1"
-_TIMEOUT = 10
+_TIMEOUT = 30
+_CACHE_DIR = Path(__file__).resolve().parents[1] / "models" / "output"
 
 
 def _get(path: str):
     r = requests.get(f"{BASE}/{path}", timeout=_TIMEOUT)
     r.raise_for_status()
     return r.json()
+
+
+def all_players(ttl_hours: float = 24.0) -> pd.DataFrame:
+    """The full Sleeper player directory (~14 MB), cached to disk. Columns:
+    sleeper_id, name, norm_name, position, team, years_exp, is_rookie."""
+    from .adp import normalize_name
+
+    _CACHE_DIR.mkdir(exist_ok=True)
+    cache = _CACHE_DIR / "sleeper_players.json"
+    if cache.exists() and (time.time() - cache.stat().st_mtime) < ttl_hours * 3600:
+        raw = json.loads(cache.read_text())
+    else:
+        raw = _get("players/nfl")
+        cache.write_text(json.dumps(raw))
+
+    rows = []
+    for sid, p in raw.items():
+        pos = p.get("position")
+        if pos not in ("QB", "RB", "WR", "TE", "K", "DEF"):
+            continue
+        name = p.get("full_name") or p.get("last_name") or sid
+        yx = p.get("years_exp")
+        rows.append({
+            "sleeper_id": sid, "name": name, "norm_name": normalize_name(name),
+            "position": pos, "team": p.get("team"), "years_exp": yx,
+            "is_rookie": int(yx == 0) if yx is not None else 0,
+        })
+    return pd.DataFrame(rows)
 
 
 def league(league_id: str) -> dict:

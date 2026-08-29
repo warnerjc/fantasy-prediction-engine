@@ -1,9 +1,11 @@
 """Draft-tool tests: roster parsing, replacement ranks, VBD, snake pick math."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from applications.board import DraftBoard, _assign_tiers, _snake_pick_numbers
+from applications.adp import normalize_name
+from applications.board import DraftBoard, _assign_tiers, _snake_pick_numbers, _unprojected_from_adp
 from applications.roster import RosterSpec, roster_spec
 
 
@@ -86,6 +88,34 @@ def test_drafted_players_drop_off_the_board():
     b2 = b.with_drafted(top5)
     assert not top5 & set(b2.available["sleeper_id"])
     assert len(b2.available) == len(b.players) - 5
+
+
+def test_normalize_name_strips_suffixes_and_punctuation():
+    assert normalize_name("Marvin Harrison Jr.") == "marvin harrison"
+    assert normalize_name("D.J. Moore") == "dj moore"
+    assert normalize_name("Michael Pittman II") == "michael pittman"
+
+
+def test_unprojected_from_adp_imputes_vbd_monotonically():
+    # 20 projected players with a clean decreasing vbd-vs-adp relationship
+    proj = pd.DataFrame({
+        "name": [f"P{i}" for i in range(20)],
+        "position": ["RB"] * 20,
+        "adp": np.arange(1, 21) * 3.0,
+        "vbd": 200 - np.arange(1, 21) * 8.0,
+    })
+    adp = pd.DataFrame({
+        "name": ["Rookie A", "Rookie B", "P3"],
+        "norm_name": ["rookie a", "rookie b", "p3"],
+        "position": ["RB", "RB", "RB"],
+        "team": ["LV", "NE", "X"],
+        "adp": [12.0, 40.0, 9.0],       # P3 is already projected -> skipped
+    })
+    out = _unprojected_from_adp(proj, adp, sleeper_players=None, max_adp=180)
+    assert set(out["name"]) == {"Rookie A", "Rookie B"}          # P3 excluded
+    a = out.set_index("name")["vbd"]
+    assert a["Rookie A"] > a["Rookie B"]                          # earlier ADP -> more value
+    assert out["proj_ppg"].isna().all() and (out["source"] == "adp").all()
 
 
 def test_my_targets_splits_gone_vs_available():
