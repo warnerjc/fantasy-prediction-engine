@@ -12,15 +12,13 @@ that's a real blocker is Python — flagged first.
 ## Tonight, before Friday
 
 - [x] **Install `sqlite3` CLI** — done.
-- [ ] Python 3.12 — **not confirmed necessary, don't install preemptively.** WSL2's system
-      Python is 3.14.4 (Ubuntu 26.04 "resolute" is very new), which was flagged as a wheel-
-      availability risk for LightGBM/pandas/scikit-learn/nflverse packages — but that's a
-      theory, not a tested fact. **First thing Friday:** create a throwaway venv with the
-      existing 3.14 and try installing the actual sprint dependencies. If pip finds wheels
-      cleanly for everything, use 3.14 as-is and skip 3.12 entirely — one less setup step. Only
-      fall back to installing 3.12 (commands already drafted in chat: apt fast path, then pyenv
-      if apt doesn't have the package) if something specifically fails to resolve — at that
-      point we'll know exactly which package forced it, instead of guessing now.
+- [x] Python 3.12 — **resolved: not needed.** Created `.venv` on WSL2's system Python 3.14.4
+      (Fri 2026-08-28) and `pip install`ed the full sprint stack — pandas 3.0.5, lightgbm 4.7.0,
+      scikit-learn 1.9.0, nfl_data_py 0.3.2, numpy 2.5.2, scipy 1.18.1, pyarrow 25.0.1,
+      fastparquet, sqlite-utils. All wheels resolved cleanly on 3.14, no source builds. The
+      wheel-availability worry didn't materialize; staying on 3.14 for the sprint venv. (The
+      post-sprint Docker image still pins 3.12 per the section below — revisit that too, since
+      3.14 now looks fine.)
 
 ## Repo location
 
