@@ -23,6 +23,14 @@ PROJECTIONS_DIR = Path(__file__).resolve().parents[1] / "models" / "output"
 # a within-position projected-PPG gap this large starts a new tier
 _TIER_GAP = {"QB": 1.5, "RB": 1.2, "WR": 1.0, "TE": 0.9, "K": 0.6, "DEF": 1.0}
 
+# The model's cross-position value is least trustworthy exactly where it disagrees
+# most with the market. QB year-over-year rank is near-noise (backtest ρ≈0.66, the
+# worst skill position; it rates efficient game-managers like Stafford as
+# QB1-overall) and it over-rates the top TEs by ~2 rounds. Blend those toward ADP
+# harder than RB/WR. Without this the mock sim drafts QB/QB/TE/TE in rounds 2-5.
+# See specifications/draft-sprint-plan.md Appendix A.
+_BLEND_BY_POS = {"QB": 0.35, "TE": 0.5}
+
 
 def _snake_pick_numbers(slot: int, teams: int, rounds: int) -> list[int]:
     out = []
@@ -127,21 +135,30 @@ def _unprojected_from_adp(proj, adp, sleeper_players, max_adp) -> pd.DataFrame:
     return out
 
 
-def _blend_market(board: pd.DataFrame, weight: float) -> pd.DataFrame:
+def _blend_market(board: pd.DataFrame, weight: float,
+                  per_pos: dict[str, float] | None = None) -> pd.DataFrame:
     """Blend model VBD with an ADP-implied VBD.
 
     Isotonic regression maps ADP -> VBD using the model-projected players that
     have both; that curve gives every ADP'd player a `market_vbd`. Final `vbd`:
-      - model player with ADP  -> weight·model + (1-weight)·market
+      - model player with ADP  -> w·model + (1-w)·market
       - model player, no ADP    -> model (unchanged)
       - unprojected (rookie)    -> market
-    `weight = 1.0` disables the blend.
+    `w` is `weight`, overridden per position by `per_pos` (`_BLEND_BY_POS`).
+    `weight >= 1.0` disables the blend entirely (pure model, no per-position
+    override either).
     """
+    per_pos = per_pos or {}
     board = board.copy()
     board["model_vbd"] = board["vbd"]
     board["market_vbd"] = np.nan
 
-    fit = board[(board["source"] == "model") & board["adp"].notna() & board["vbd"].notna()]
+    # Fit the ADP -> VBD curve on the positions whose model value we trust (exclude
+    # the per_pos distrust list): including QB/TE model rows, whose VBD is inflated
+    # exactly where they disagree with ADP, would bend the curve up toward them and
+    # defeat the point of the blend.
+    fit = board[(board["source"] == "model") & board["adp"].notna() & board["vbd"].notna()
+                & ~board["position"].isin(per_pos)]
     if len(fit) < 10:                       # no ADP -> rookies can't be placed; drop them
         return board[board["source"] == "model"].copy()
 
@@ -149,13 +166,22 @@ def _blend_market(board: pd.DataFrame, weight: float) -> pd.DataFrame:
     has_adp = board["adp"].notna()
     board.loc[has_adp, "market_vbd"] = iso.predict(board.loc[has_adp, "adp"].to_numpy())
 
+    # A distrusted-position model player (QB/TE) the market isn't drafting in the
+    # top ~180 has no ADP and would otherwise float on pure model value. Pin it to
+    # the bottom of the market curve so the blend discounts it like any late ADP.
+    if per_pos:
+        floor = float(iso.predict([float(fit["adp"].max())])[0])
+        pin = board["adp"].isna() & (board["source"] == "model") & board["position"].isin(per_pos)
+        board.loc[pin, "market_vbd"] = floor
+
     m, mkt = board["model_vbd"], board["market_vbd"]
     # unprojected (rookie) rows: always take the market value, regardless of weight
     board.loc[m.isna() & mkt.notna(), "vbd"] = mkt[m.isna() & mkt.notna()]
-    # model rows with an ADP: blend (weight = 1.0 leaves the model value untouched)
+    # model rows with an ADP: blend (weight >= 1.0 leaves every model value untouched)
     if weight < 1.0:
+        w = board["position"].map(lambda p: per_pos.get(p, weight)).astype(float)
         both = m.notna() & mkt.notna()
-        board.loc[both, "vbd"] = weight * m[both] + (1 - weight) * mkt[both]
+        board.loc[both, "vbd"] = w[both] * m[both] + (1 - w[both]) * mkt[both]
     return board
 
 
@@ -193,7 +219,7 @@ def build_board(
     board["is_rookie"] = board.get("is_rookie", 0)
     board["is_rookie"] = board["is_rookie"].fillna(0).astype(int)
     board["sleeper_id"] = board["sleeper_id"].astype("string")
-    board = _blend_market(board, blend)
+    board = _blend_market(board, blend, _BLEND_BY_POS)
     board["tier"] = _assign_tiers(board)
     board["overall_rank"] = board["vbd"].rank(ascending=False, method="first").astype(int)
 

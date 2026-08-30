@@ -156,8 +156,14 @@ tool) is done Friday. 55 tests. Remaining is validation + polish, not building:
 - [x] Fantasy-relevant week window — drop each season's final REG week from labels + prior-season
   feature windows (fantasy-dead, resting starters). Lifts TE/DEF ρ, ~neutral overall, 2026
   draftable board unchanged. See Appendix B.
-- [ ] Tune `_BASELINE_MULT` / flex splits / `--blend` weight — the mock sim drafts QB/TE
-  earlier than typical, a signal the blend could lean more toward market for those.
+- [x] Tune the model/market blend — the mock sim was drafting QB round 4 / TE round 2 and
+  doubling up at QB by round 5. Fix: per-position blend weights (`_BLEND_BY_POS` in
+  `board.py`) — QB `0.35`, TE `0.5` vs the `--blend 0.7` default, since the backtest shows
+  the model's QB/TE rank is near-noise and it rates efficient vets ~2 rounds ahead of ADP.
+  Also: fit the ADP→VBD isotonic curve on RB/WR/K/DEF only (trusted positions), and pin a
+  QB/TE the model likes but the market isn't drafting (no ADP) to the bottom of the curve.
+  Sleeper sim now lands first QB round 6-7 / first TE round 3. Yahoo stays RB-heavy (correct
+  for 0.25-PPR 10-team). `_BASELINE_MULT` left as-is (the blend does the work now).
 
 ### Sun 08-30 night — validate + refine
 - Sanity-check the model: SHAP/feature-importance should show targets/carries/red-zone

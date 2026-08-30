@@ -32,15 +32,18 @@ positional scarcity). `run()` is where that would branch.
    `roster_positions` into dedicated starter slots + flex slots (with an
    eligibility→position split), then a per-position replacement rank:
    `teams × (starters + flex share) × baseline_mult`. `baseline_mult` pushes
-   QB/TE deeper (1.6 / 1.3) because "last starter" overvalues positions that
+   QB/TE deeper (1.4 / 1.15) because "last starter" overvalues positions that
    stream cheaply off waivers. Model VBD is
    `projected_season_points − replacement_points[position]`.
    **Then it's blended with the market** (`_blend_market`): an isotonic curve maps
-   ADP → VBD from the players that have both, and the final VBD is
-   `0.7·model + 0.3·market` (tunable via `--blend`). This reins in the model's
-   sharpest disagreements with consensus — most visibly elite QBs, which the raw
-   model rates ~2 rounds ahead of where 1-QB leagues draft them. `--blend 1.0`
-   turns it off. Tune `_BASELINE_MULT` in `roster.py` too.
+   ADP → VBD (fit on RB/WR/K/DEF only — the positions whose model VBD we trust),
+   and the final VBD is `W·model + (1−W)·market`. `W` is `--blend` (default 0.7),
+   **overridden per position by `_BLEND_BY_POS`** — QB `0.35`, TE `0.5`, because
+   the model's year-over-year rank for those is near-noise and it rates efficient
+   veterans (Stafford, McBride) ~2 rounds ahead of ADP. A QB/TE the model likes
+   that has no ADP at all (market isn't drafting it) is pinned to the bottom of
+   the curve, not floated on pure model value. `--blend 1.0` turns the whole blend
+   off. Tune `_BASELINE_MULT` in `roster.py` too.
 2. **Live draft state.** `sleeper.py` polls `/draft/<id>/picks`; drafted players
    drop off the board. Yahoo `236625` is an offline draft with no pollable state
    — the static board is the tool.
@@ -84,10 +87,14 @@ code path as `--watch`** without a draft room.
 - `--sims N` → most-common pick per round, VBD-captured distribution, the round
   you typically land your first QB/RB/WR/TE
 
-The sim drafter is greedy-VBD, not a real draft AI — its output is a **sanity
-check on the board and a read on where the model/blend leans** (e.g. it drafts
-QB/TE earlier than most humans, which is a signal to tune `--blend` / `_BASELINE_MULT`),
-not a strategy to copy.
+  After the `_BLEND_BY_POS` tuning (Sun 08-30), the sleeper sim lands its first QB
+  round 6-7 and first TE round 3 (was QB round 4, two QBs by round 5). Yahoo stays
+  RB-heavy with a late first WR — correct for a 0.25-PPR 10-team league, not a bug.
+
+The sim drafter is greedy-VBD with no roster-need logic, not a real draft AI — its
+output is a **sanity check on the board and a read on where the model/blend
+leans**, not a strategy to copy. It still doubles up at TE (McBride *and* Bowers)
+because nothing tells it "I already have a starter there."
 
 ### Known gaps
 

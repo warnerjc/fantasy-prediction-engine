@@ -145,6 +145,35 @@ def test_blend_market_fills_rookies_and_pulls_model_toward_adp():
     assert pd.notna(pure.set_index("name").loc["RookA", "vbd"])      # rookies still filled
 
 
+def test_blend_market_per_position_weight_and_no_adp_pin():
+    # anchor rows spanning the whole ADP range so the isotonic curve has a real,
+    # low floor; then two QBs the model loves equally — one with a late ADP, one
+    # the market isn't drafting at all.
+    n = 30
+    rb = pd.DataFrame({
+        "name": [f"P{i}" for i in range(n)], "position": ["RB"] * n, "source": ["model"] * n,
+        "adp": np.linspace(1, 180, n), "vbd": np.linspace(180, 2, n),
+    })
+    q = pd.DataFrame({
+        "name": ["QBadp", "QBnoadp"], "position": ["QB", "QB"], "source": ["model", "model"],
+        "adp": [140.0, np.nan], "vbd": [160.0, 160.0],
+    })
+    out = _blend_market(pd.concat([rb, q], ignore_index=True),
+                        weight=0.7, per_pos={"QB": 0.3}).set_index("name")
+
+    qa = out.loc["QBadp"]
+    assert qa["vbd"] == pytest.approx(0.3 * qa["model_vbd"] + 0.7 * qa["market_vbd"], rel=1e-6)
+    # QBadp blended toward the low market value sits well under its model VBD
+    assert qa["vbd"] < 0.5 * qa["model_vbd"]
+    # no-ADP QB: pinned to the bottom of the curve, then blended -> far below pure model
+    floor = out.loc[out["market_vbd"].notna(), "market_vbd"].min()
+    assert out.loc["QBnoadp", "market_vbd"] == pytest.approx(floor)
+    assert out.loc["QBnoadp", "vbd"] < 0.5 * 160
+    # an RB with no override still uses the passed 0.7 weight
+    r0 = out.loc["P0"]
+    assert r0["vbd"] == pytest.approx(0.7 * r0["model_vbd"] + 0.3 * r0["market_vbd"], rel=1e-6)
+
+
 def test_my_targets_splits_gone_vs_available():
     b = _board()
     t = b.my_targets(slot=3, teams=10, rounds=15, next_pick_no=1)
