@@ -23,6 +23,9 @@ bin/refresh-data   --seasons 2015-2026          # re-pull nflverse into SQLite (
 bin/refresh-models --league sleeper             # retrain + rewrite projections
 bin/refresh-models --league yahoo
 
+bin/backtest --league sleeper                   # projected-vs-actual + baselines (~20s)
+bin/backtest --league sleeper --season 2024     # one held-out season
+
 bin/test                                         # run the test suite
 ```
 

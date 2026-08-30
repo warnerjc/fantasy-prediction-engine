@@ -61,6 +61,33 @@ Gain-importance sanity check (leakage guard): WR led by `rec_yd_pg` then
 `rush_yd_pg` / `carries`. Opportunity dominates efficiency — the leakage
 discipline in `/features` held.
 
+## Backtest + baselines (`backtest.py`)
+
+`python -m models.backtest --league sleeper [--season YYYY | YYYY-YYYY]`
+(`bin/backtest`). Re-runs the walk-forward split per held-out season, joins
+predictions to actual PPG, and grades the model against three cheap baselines:
+
+- **`last_ppg`** — the player's PPG the prior season (naive persistence)
+- **`ewma_ppg`** — recency-weighted mean of the prior two seasons (0.65 / 0.35)
+- **`market_adp`** — preseason ADP for that season (FFC historical; rank metrics
+  only, ADP isn't a PPG estimate)
+
+Writes `output/<league>_baselines_<tag>.csv` (per season/position/method) and
+`output/<league>_backtest_<tag>.csv` (per player, biggest rank misses first;
+`--all` keeps the deep-bench churn, default is draftable range only).
+
+**Finding (2020–25, both leagues):** on Spearman the model is a **wash with
+`ewma_ppg`** for every skill position — QB 0.69 vs 0.67, WR 0.77 vs 0.77, and it
+slightly *trails* the naive baseline for RB (0.73 vs 0.74) and TE (0.68 vs 0.71).
+`market_adp` has lower rank ρ but the **best top-N hit rate everywhere** (RB 0.74,
+TE 0.76 vs the model's 0.69 / 0.53) — the crowd is better at identifying *which*
+players finish top-tier. For **DEF** the model (ρ≈0.05) is clearly *worse* than
+just using `ewma_ppg` (ρ≈0.25). Takeaways: the ADP blend in the draft board
+(`draft_tool._blend_market`) is earning its keep; a v2 model that can't beat
+`ewma_ppg` on held-out seasons isn't worth shipping over it; consider dropping the
+DEF model for a straight prior-year table. Roadmap to actually beat ADP:
+`specifications/draft-sprint-plan.md` → Appendix A.
+
 ## Team-change features (walk-forward A/B)
 
 `changed_team` + new-team environment + vacated opportunity share (see

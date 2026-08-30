@@ -148,7 +148,11 @@ tool) is done Friday. 55 tests. Remaining is validation + polish, not building:
 - [x] Dry-run without a real mock — `applications/mock.py` (local full-draft sim + `--sims N`
   Monte Carlo, both leagues from configs); `draft_tool --replay --draft <id>` fast-forwards a
   completed Sleeper draft through the live view. `--watch` plumbing exercised without a room.
-- [ ] `python -m models.build --backtest <season>` — repeatable projected-vs-actual view (nice-to-have).
+- [x] `python -m models.backtest --league <l> [--season Y|Y-Y]` (`bin/backtest`) — repeatable
+  projected-vs-actual view + baselines (`last_ppg`, `ewma_ppg`, historical `market_adp`).
+  Finding (2020–25): model is a wash with `ewma_ppg` on rank ρ for every skill position and
+  worse than `ewma_ppg` for DEF; ADP has the best top-N hit. Validates leaning on the `--blend`
+  ADP mix. See `models/README.md` → Backtest + baselines, and Appendix A for the roadmap.
 - [ ] Tune `_BASELINE_MULT` / flex splits / `--blend` weight — the mock sim drafts QB/TE
   earlier than typical, a signal the blend could lean more toward market for those.
 
@@ -176,3 +180,64 @@ tool) is done Friday. 55 tests. Remaining is validation + polish, not building:
 ### Yahoo draft — whenever it lands
 - Same static ranked list, manual scoring config already built Friday. No additional
   Yahoo-specific engineering required unless real API integration is explicitly requested later.
+
+---
+
+## Appendix A — variables that could beat market ADP (post-sprint backlog)
+
+Context: the `bin/backtest` baseline run (2020–25, both leagues) showed the v1 model is a
+**wash with a recency-weighted 2-yr PPG average** on rank correlation for every skill
+position, and market ADP has the best top-N hit rate everywhere. On draft-day *ranking
+accuracy* alone the tabular-usage model has a ceiling near ADP. To clear it we need signal
+that is both predictive **and** underweighted by consensus — ADP already efficiently prices
+name value, last year's box score, draft capital, obvious depth-chart moves, and beat-writer
+narrative.
+
+The tiers below are roughly in expected-value order. None are sprint work; they are the
+modeling roadmap once the drafts are done. "Already built" flags features that exist in
+`/features` but are held out of the v1 season matrix.
+
+### Tier 1 — team environment (the model's biggest blind spot; features half-built)
+
+- **Vegas preseason team strength** — season win totals → projected team points-for /
+  implied pace. `context_features` (`implied_total`, `team_spread`, weather) already exist
+  weekly-grain but are **not wired into the season model**. Wiring a target-season
+  team-environment block in is the cheapest high-leverage change available.
+- **Scheme / pace** — pass rate over expected (PROE), neutral-script pass rate,
+  seconds/play, new-OC / new-HC flag.
+- **Target & carry competition, done properly** — explicit vacated *and* added volume when
+  teammates arrive/depart, weighted by quality of the competition. The current
+  `team_change` features are a blunt version that barely moved the needle.
+
+### Tier 2 — player trajectory
+
+- **Structured age × position curves** — RB cliff ~28, WR year-3 leap, TE year-3/4. The
+  model has raw `age` / `years_exp` as tree inputs but no structured curve; this directly
+  targets the documented "over-projects aging vets off injury" bias.
+- **Durability model** — replace the flat `_games_assumption` per position with
+  games-missed-last-2-seasons + injury type + age. Fixes the Mostert / B. Robinson bias.
+
+### Tier 3 — rookies (currently zero independent signal — placed by pure ADP)
+
+- **Draft capital** — `draft_ovr` is already in `player_ids`, just unused for players with
+  no prior NFL season. A rookie-only model keyed on draft capital is the single best start.
+- **College production** — dominator rating, breakout age, yards per route run, college
+  target share adjusted for competition.
+- **Athletic testing** — RAS / 40 (modest for WR/RB).
+- **Landing spot** — projected team pass rate, depth-chart slot, vacated volume.
+
+### Tier 4 — beating ADP directly (market microstructure)
+
+- **ADP trend / velocity** — is a player's ADP rising or falling over the last ~2 weeks of
+  drafts.
+- **ADP dispersion** — `stdev` / `high` / `low` are already fetched from FFC and unused.
+  High dispersion = market disagreement = opportunity.
+- **Cross-source ADP delta** — Sleeper vs Underdog vs NFFC vs FFC; gaps between casual and
+  sharp pools are real inefficiencies.
+- **Expert consensus vs ADP** — FantasyPros ECR minus ADP.
+
+### Tier 5 — the real structural edge (not draft day)
+
+- **v2 weekly quantile model + injury/news adjustment layer.** Static free lists cannot
+  react to Thursday injury news or a mid-season target-share shift. That is a persistent
+  in-season edge; the draft-day ranking is a one-shot where the market is hard to beat.

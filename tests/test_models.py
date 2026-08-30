@@ -124,3 +124,53 @@ def test_min_label_games_filters_training_rows_not_inference():
     # still predicts for every row, including the filtered-out ones
     preds = model.predict(df)
     assert len(preds) == len(df) and preds["pred_mean"].notna().all()
+
+
+# --- backtest baselines -------------------------------------------------------
+
+from models.backtest import _actuals, _ewma_ppg, _grade, _parse_season, _prior_ppg
+
+
+def _lab():
+    """player/season/pos labels: p1 plays every year, p2 only 2022, p3 short 2023."""
+    return pd.DataFrame([
+        dict(player_id="p1", season=2021, position="WR", games=16, ppg=10.0, norm_name="p1", name="p1"),
+        dict(player_id="p1", season=2022, position="WR", games=16, ppg=14.0, norm_name="p1", name="p1"),
+        dict(player_id="p1", season=2023, position="WR", games=16, ppg=18.0, norm_name="p1", name="p1"),
+        dict(player_id="p2", season=2022, position="WR", games=16, ppg=8.0, norm_name="p2", name="p2"),
+        dict(player_id="p3", season=2023, position="WR", games=2, ppg=25.0, norm_name="p3", name="p3"),
+    ])
+
+
+def test_prior_ppg_pulls_the_named_season_back():
+    got = _prior_ppg(_lab(), season=2023, position="WR", back=1)
+    assert got.loc["p1"] == pytest.approx(14.0)          # 2022
+    assert "p3" not in got.index                          # p3 has no 2022 row
+
+
+def test_ewma_weights_recent_season_more_and_falls_back_to_one_season():
+    got = _ewma_ppg(_lab(), season=2023, position="WR")
+    # p1: 0.65*14 (2022) + 0.35*10 (2021)
+    assert got.loc["p1"] == pytest.approx(0.65 * 14.0 + 0.35 * 10.0)
+    # p2 only has 2022 -> that value alone, not shrunk toward zero
+    assert got.loc["p2"] == pytest.approx(8.0)
+
+
+def test_actuals_drops_short_seasons():
+    a = _actuals(_lab(), season=2023, position="WR")
+    assert "p1" in a.index and "p3" not in a.index         # p3 played 2 games
+    assert list(a.columns) == ["name", "norm_name", "ppg", "games"]
+
+
+def test_grade_rank_only_nulls_mae_but_keeps_spearman():
+    pred = pd.Series({"a": -1.0, "b": -2.0, "c": -3.0, "d": -4.0, "e": -5.0})
+    actual = pd.Series({"a": 20.0, "b": 15.0, "c": 10.0, "d": 5.0, "e": 1.0})
+    row = _grade("market_adp", pred, actual, top_n=3, season=2024, position="WR", rank_only=True)
+    assert np.isnan(row["mae"])
+    assert row["spearman"] == pytest.approx(1.0)           # -adp perfectly orders actual
+
+
+def test_parse_season_handles_scalar_range_and_none():
+    assert _parse_season(None) is None
+    assert _parse_season("2024") == [2024]
+    assert _parse_season("2020-2022") == [2020, 2021, 2022]
