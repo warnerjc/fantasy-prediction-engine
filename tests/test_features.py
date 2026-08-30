@@ -68,6 +68,17 @@ def test_prior_season_n_seasons_reaches_further_back(pws):
     assert set(vis["season"]) == {2022, 2023}
 
 
+def test_drop_final_week_removes_each_seasons_last_reg_week():
+    rows = [_pws_row("p", "WR", "AAA", 2019, wk) for wk in range(15, 18)]      # 2019: 15,16,17
+    rows += [_pws_row("p", "WR", "AAA", 2023, wk) for wk in range(16, 19)]     # 2023: 16,17,18
+    df = pd.DataFrame(rows)
+    vis = visible_weeks(df, AsOf(2024, 1), Window.prior_season(n_seasons=5, drop_final_week=True))
+    assert set(zip(vis["season"], vis["week"])) == {(2019, 15), (2019, 16), (2023, 16), (2023, 17)}
+    # default keeps every week
+    keep = visible_weeks(df, AsOf(2024, 1), Window.prior_season(n_seasons=5))
+    assert keep["week"].max() == 18
+
+
 def test_trailing_window_takes_last_n_games_played(pws):
     vis = visible_weeks(pws, AsOf(2023, 4), Window.trailing(2))
     wr1 = vis[vis["player_id"] == "wr1"]

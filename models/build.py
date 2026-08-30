@@ -42,16 +42,16 @@ def _feature_matrix(position: str, tbl: dict, target_seasons: list[int]) -> pd.D
     for s in target_seasons:
         if position in OFFENSE:
             fm = season_feature_matrix(tbl["player_week_stats"], tbl["snap_counts"],
-                                       tbl["player_ids"], s, Window.prior_season(n_seasons=2),
+                                       tbl["player_ids"], s, Window.prior_season(n_seasons=2, drop_final_week=True),
                                        seasonal_rosters=tbl["seasonal_rosters"],
                                        team_week=tbl["team_week"])
             fm = fm[fm["most_recent_pos"] == position] if not fm.empty else fm
         elif position == "K":
             fm = kicker_feature_matrix(tbl["kicking_stats"], tbl["team_week"], s,
-                                       Window.prior_season(n_seasons=2))
+                                       Window.prior_season(n_seasons=2, drop_final_week=True))
         else:  # DEF
             fm = defense_feature_matrix(tbl["team_defense_stats"], tbl["team_week"], s,
-                                        Window.prior_season(n_seasons=2))
+                                        Window.prior_season(n_seasons=2, drop_final_week=True))
         if not fm.empty:
             frames.append(fm)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -62,7 +62,7 @@ def run(league: str, project_season: int | None) -> None:
     tbl = _load_tables()
     rules = load_rules(league)
     labels = season_labels(tbl["player_week_stats"], tbl["kicking_stats"],
-                           tbl["team_defense_stats"], rules)
+                           tbl["team_defense_stats"], rules, drop_final_week=True)
 
     seasons = sorted(tbl["player_week_stats"]["season"].unique())
     first_target = seasons[0] + 2                      # need 2 prior seasons of features

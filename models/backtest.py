@@ -125,7 +125,7 @@ def run(league: str, seasons: list[int] | None, adp_teams: int, all_players: boo
     tbl = _load_tables()
     rules = load_rules(league)
     labels = season_labels(tbl["player_week_stats"], tbl["kicking_stats"],
-                           tbl["team_defense_stats"], rules)
+                           tbl["team_defense_stats"], rules, drop_final_week=True)
     names = tbl["player_ids"][["gsis_id", "name"]].rename(columns={"gsis_id": "player_id"})
     lab = _labels_by_pos_season(labels, names)
 

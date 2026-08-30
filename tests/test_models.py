@@ -38,6 +38,21 @@ def test_season_labels_scores_and_averages_ppg():
     assert lab.loc["wr1", "ppg"] == pytest.approx(15.5)
 
 
+def test_season_labels_drop_final_week_excludes_each_seasons_last_week():
+    pws = pd.DataFrame([
+        _pw("wr1", "WR", "AA", 2023, 1, receptions=5, receiving_yards=100),
+        _pw("wr1", "WR", "AA", 2023, 17, receptions=5, receiving_yards=100),
+        _pw("wr1", "WR", "AA", 2023, 18, receptions=20, receiving_yards=400),   # dead week blow-up
+    ])
+    rules = ScoringRules(per_unit={K.REC: 1.0, K.REC_YD: 0.1})
+    empty_k = pd.DataFrame(columns=["kicker_player_id", "season", "week", "game_type"])
+    empty_d = pd.DataFrame(columns=["defense_team", "season", "week", "game_type"])
+
+    lab = season_labels(pws, empty_k, empty_d, rules, drop_final_week=True).set_index("player_id")
+    assert lab.loc["wr1", "games"] == 2                          # wk18 dropped
+    assert lab.loc["wr1", "ppg"] == pytest.approx(15.0)          # not inflated by wk18
+
+
 # --- prediction shape -----------------------------------------------------
 
 def test_prediction_v1_has_mean_only():

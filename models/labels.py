@@ -21,6 +21,16 @@ from scoring.extract import (
 OFFENSE = ("QB", "RB", "WR", "TE")
 
 
+def _drop_final_week(df: pd.DataFrame, week_col: str = "week") -> pd.DataFrame:
+    """Drop the last REG week of each season -- played after every fantasy
+    championship by locked-seed teams resting starters, so it's fantasy-dead and
+    statistically distorted. Final week is 17 for 2015-2020, 18 for 2021 on."""
+    if df.empty:
+        return df
+    final = df.groupby("season")[week_col].transform("max")
+    return df[df[week_col] < final]
+
+
 def _score_rows(canonical: pd.DataFrame, rules: ScoringRules, position_col: str | None) -> pd.Series:
     pos = canonical[position_col] if position_col and position_col in canonical else None
     return pd.Series(
@@ -38,13 +48,20 @@ def season_labels(
     team_defense_stats: pd.DataFrame,
     rules: ScoringRules,
     season_types: tuple[str, ...] = ("REG",),
+    drop_final_week: bool = False,
 ) -> pd.DataFrame:
     """One row per (player_id, season, position): games, fantasy_points, ppg.
     For DEF, ``player_id`` is the team abbreviation.
+
+    ``drop_final_week`` excludes each season's last REG week (fantasy-dead,
+    resting starters) -- the v1 draft-projection caller opts in; see
+    ``_drop_final_week``.
     """
     frames = []
 
     off = pws[pws["season_type"].isin(season_types)].copy()
+    if drop_final_week:
+        off = _drop_final_week(off)
     can = canonical_offense_stats(off)
     can["fp"] = _score_rows(can, rules, "position")
     can = can[can["position"].isin(OFFENSE)]
@@ -54,6 +71,8 @@ def season_labels(
     )
 
     kick = kicking_stats[kicking_stats["game_type"].isin(season_types)].copy()
+    if drop_final_week:
+        kick = _drop_final_week(kick)
     if not kick.empty:
         ck = canonical_kicking_stats(kick)
         ck["fp"] = _score_rows(ck, rules, None)
@@ -64,6 +83,8 @@ def season_labels(
         frames.append(g)
 
     dst = team_defense_stats[team_defense_stats["game_type"].isin(season_types)].copy()
+    if drop_final_week:
+        dst = _drop_final_week(dst)
     if not dst.empty:
         cd = canonical_dst_stats(dst)
         cd["fp"] = _score_rows(cd, rules, None)

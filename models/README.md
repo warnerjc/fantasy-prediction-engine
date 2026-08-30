@@ -51,10 +51,20 @@ with ≥ `min_train_seasons` prior. Metrics per season (never one blended number
 Spearman rank correlation (what matters for a draft board), MAE on PPG, and
 top-N hit rate (N = 12 QB/TE/K/DEF, 24 RB/WR).
 
-Current (2015–24 data, both sprint leagues): **QB/WR ρ≈0.67, RB≈0.58, TE≈0.60**,
-top-N hit 0.52–0.66. **K and DEF ρ≈0.05–0.09** — near-noise, as expected;
-year-over-year kicker/defense fantasy output is barely predictable. Draft K/DEF
-late and stream them; the projections are there for completeness, not edge.
+Current (2015–25 data, walk-forward 2020–25, both sprint leagues):
+**WR ρ≈0.75, RB≈0.73, TE≈0.70, QB≈0.66**, top-N hit 0.53–0.66. **K and DEF
+ρ≈0.10** — near-noise, as expected; year-over-year kicker/defense fantasy output
+is barely predictable. Draft K/DEF late and stream them; the projections are there
+for completeness, not edge.
+
+Labels and prior-season feature windows span **weeks 1 through (final REG week −
+1)** — 1–16 pre-2021, 1–17 from 2021 (`Window(drop_final_week=True)` /
+`season_labels(drop_final_week=True)`, opted in at the v1 call sites). The final
+NFL week is played after every fantasy championship by locked-seed teams resting
+starters — fantasy-dead and distorted. Excluding it lifted **TE ρ ~+0.03** and
+**DEF ~+0.06** (the low-volume positions a single weird week swings most), cost
+QB/WR ~0.02, and left the 2026 draftable-range board essentially unchanged
+(rank ρ 0.98 vs the full-REG label).
 
 Gain-importance sanity check (leakage guard): WR led by `rec_yd_pg` then
 `target_share` / `receptions_pg` / snap %; RB led by `off_snap_pct_mean` then
@@ -76,13 +86,13 @@ Writes `output/<league>_baselines_<tag>.csv` (per season/position/method) and
 `output/<league>_backtest_<tag>.csv` (per player, biggest rank misses first;
 `--all` keeps the deep-bench churn, default is draftable range only).
 
-**Finding (2020–25, both leagues):** on Spearman the model is a **wash with
-`ewma_ppg`** for every skill position — QB 0.69 vs 0.67, WR 0.77 vs 0.77, and it
-slightly *trails* the naive baseline for RB (0.73 vs 0.74) and TE (0.68 vs 0.71).
+**Finding (2020–25, both leagues, fantasy-relevant-weeks label):** on Spearman the
+model is a **wash with `ewma_ppg`** for every skill position — QB 0.67 vs 0.65,
+WR 0.76 vs 0.77, TE 0.71 vs 0.72, and it slightly *trails* on RB (0.73 vs 0.75).
 `market_adp` has lower rank ρ but the **best top-N hit rate everywhere** (RB 0.74,
-TE 0.76 vs the model's 0.69 / 0.53) — the crowd is better at identifying *which*
-players finish top-tier. For **DEF** the model (ρ≈0.05) is clearly *worse* than
-just using `ewma_ppg` (ρ≈0.25). Takeaways: the ADP blend in the draft board
+TE 0.78 vs the model's 0.67 / 0.56) — the crowd is better at identifying *which*
+players finish top-tier. For **DEF** the model (ρ≈0.10) is still clearly *worse*
+than just using `ewma_ppg` (ρ≈0.24). Takeaways: the ADP blend in the draft board
 (`draft_tool._blend_market`) is earning its keep; a v2 model that can't beat
 `ewma_ppg` on held-out seasons isn't worth shipping over it; consider dropping the
 DEF model for a straight prior-year table. Roadmap to actually beat ADP:

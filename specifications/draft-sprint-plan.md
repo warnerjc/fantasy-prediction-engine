@@ -153,6 +153,9 @@ tool) is done Friday. 55 tests. Remaining is validation + polish, not building:
   Finding (2020–25): model is a wash with `ewma_ppg` on rank ρ for every skill position and
   worse than `ewma_ppg` for DEF; ADP has the best top-N hit. Validates leaning on the `--blend`
   ADP mix. See `models/README.md` → Backtest + baselines, and Appendix A for the roadmap.
+- [x] Fantasy-relevant week window — drop each season's final REG week from labels + prior-season
+  feature windows (fantasy-dead, resting starters). Lifts TE/DEF ρ, ~neutral overall, 2026
+  draftable board unchanged. See Appendix B.
 - [ ] Tune `_BASELINE_MULT` / flex splits / `--blend` weight — the mock sim drafts QB/TE
   earlier than typical, a signal the blend could lean more toward market for those.
 
@@ -241,3 +244,22 @@ modeling roadmap once the drafts are done. "Already built" flags features that e
 - **v2 weekly quantile model + injury/news adjustment layer.** Static free lists cannot
   react to Thursday injury news or a mid-season target-share shift. That is a persistent
   in-season edge; the draft-day ranking is a one-shot where the market is hard to beat.
+
+## Appendix B — label/feature week window (fantasy-relevant weeks only)
+
+Done Sun 08-30. NFL playoff weeks (`season_type='POST'`) were already excluded from both
+labels and features. The remaining issue: the label weighted **every** REG week equally,
+including the final week of each NFL season — which is played after every fantasy league's
+championship and features locked-seed teams resting starters (fantasy-dead **and**
+statistically distorted). The dead week is Week 17 for 2015–2020 and Week 18 for 2021–2025.
+
+Fix: label PPG and prior-season feature windows now span **weeks 1 through (final REG week
+− 1)** — i.e. 1–16 pre-2021, 1–17 from 2021 — a single data-driven rule ("every regular
+season week except the one after every league's title game"). Implemented as
+`Window(drop_final_week=...)` + `season_labels(drop_final_week=...)`, opted in at the v1
+season-grain call sites only (v2 weekly windows are unaffected). See
+`models/README.md` → Backtest + baselines for the before/after.
+
+Still open (orthogonal): a minimum-snaps floor on what counts as a "game" — token
+appearances (mid-season injury returns, Week 18 cameos) currently count as full games and
+drag PPG down.

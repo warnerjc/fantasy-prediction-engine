@@ -18,7 +18,7 @@ week itself — that's what `context_features` uses.
 | | |
 |---|---|
 | `AsOf(season, week=1)` | the game being predicted; nothing from `>= (season, week)` is visible |
-| `Window.prior_season(n_seasons=1)` | every REG week of the N seasons before the as-of season (v1) |
+| `Window.prior_season(n_seasons=1, drop_final_week=False)` | every REG week of the N seasons before the as-of season (v1). `drop_final_week=True` also drops each season's last REG week (fantasy-dead, resting starters) — the v1 draft-grain call sites opt in |
 | `Window.trailing(n_games)` | the last N games *each player actually played* before the as-of point, crossing the season boundary (v2) |
 | `visible_weeks(df, as_of, window, ...)` | rows of `df` visible at `as_of` per `window`; adds `week_index` (`season*100 + week`, orderable). Works on `player_week_stats` (`season_type`) and the nflverse raw tables (`season_type_col="game_type"`). |
 
