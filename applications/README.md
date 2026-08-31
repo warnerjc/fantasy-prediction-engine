@@ -62,6 +62,18 @@ positional scarcity). `run()` is where that would branch.
    The `adp` column is shown for *every* player, so model-vs-market gaps (value
    or reach) are visible at a glance. Sleeper ids for these rows come from the
    cached Sleeper player directory, so they still drop off when drafted.
+6. **2026 team / availability / ADP corrections** (`roster_2026.py`). The model
+   labels players with their 2025 team, can't see offseason moves / cuts /
+   suspensions, and blends against a cached crowd ADP that lags breaking news.
+   `specifications/league-configs/roster-2026-overrides.json` is the
+   hand-maintained fix: `team` relabels `most_recent_team` (adds a `team_source`
+   column: `override` / `model` / `adp`), `out` drops a player, `adp` forces a
+   player's ADP so a news-driven draft-stock move (a suspension, say) flows into
+   the market blend. Seeded from a scrape of `nfl.com/sitemap/html/rosters/2026`
+   cross-checked vs nflverse + the user's Sleeper export — nflverse's `roster_2026`
+   release alone is **not** trusted (at cut time it had Pacheco on DET, Fields on
+   KC, and dropped rostered vets). Edit the JSON up to draft day; revisit the
+   automated path once nflverse firms up (early September).
 
 ### Consuming the prediction shape
 

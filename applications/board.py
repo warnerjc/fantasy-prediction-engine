@@ -17,6 +17,7 @@ from sklearn.isotonic import IsotonicRegression
 from data.db import read_sql
 from .adp import normalize_name
 from .roster import RosterSpec, SCORABLE
+from .roster_2026 import apply_adp_overrides, apply_team_labels, drop_unavailable
 
 PROJECTIONS_DIR = Path(__file__).resolve().parents[1] / "models" / "output"
 
@@ -203,6 +204,9 @@ def build_board(
     proj["sleeper_id"] = proj["sleeper_id"].fillna(proj["player_id"]).astype(str)
     proj["source"] = "model"
 
+    # current-season team labels (offseason moves the model can't see)
+    proj = apply_team_labels(proj)
+
     repl_rank = spec.replacement_rank()
     replacement_points = {}
     for pos in SCORABLE:
@@ -219,6 +223,16 @@ def build_board(
     board["is_rookie"] = board.get("is_rookie", 0)
     board["is_rookie"] = board["is_rookie"].fillna(0).astype(int)
     board["sleeper_id"] = board["sleeper_id"].astype("string")
+    if "team_source" in board.columns:
+        board["team_source"] = board["team_source"].fillna("adp")  # unprojected rows
+
+    board, dropped = drop_unavailable(board)
+    if dropped:
+        print(f"roster-2026: dropped {len(dropped)} unavailable — {', '.join(dropped)}")
+    board, adp_forced = apply_adp_overrides(board)
+    if adp_forced:
+        print(f"roster-2026: forced ADP — {', '.join(adp_forced)}")
+
     board = _blend_market(board, blend, _BLEND_BY_POS)
     board["tier"] = _assign_tiers(board)
     board["overall_rank"] = board["vbd"].rank(ascending=False, method="first").astype(int)

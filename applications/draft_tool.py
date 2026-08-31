@@ -99,8 +99,8 @@ def _build(league: str, spec, use_adp: bool, season: int | None, blend: float):
 
 
 _EXPORT_COLS = ["overall_rank", "position", "pos_rank", "tier", "name", "most_recent_team",
-                "proj_ppg", "proj_points", "adp", "vbd", "model_vbd", "market_vbd",
-                "source", "is_rookie"]
+                "team_source", "proj_ppg", "proj_points", "adp", "vbd", "model_vbd",
+                "market_vbd", "source", "is_rookie"]
 
 
 def _export(board, league: str) -> Path:

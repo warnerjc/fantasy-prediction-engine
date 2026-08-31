@@ -164,6 +164,18 @@ tool) is done Friday. 55 tests. Remaining is validation + polish, not building:
   QB/TE the model likes but the market isn't drafting (no ADP) to the bottom of the curve.
   Sleeper sim now lands first QB round 6-7 / first TE round 3. Yahoo stays RB-heavy (correct
   for 0.25-PPR 10-team). `_BASELINE_MULT` left as-is (the blend does the work now).
+- [x] 2026 team + availability corrections (`applications/roster_2026.py` +
+  `league-configs/roster-2026-overrides.json`). The model labels players with their 2025
+  team and can't see offseason moves/cuts/suspensions. **nflverse's `roster_2026` release
+  is unreliable at cut time** (had Pacheco→DET, Fields→KC, dropped rostered vets like
+  Diggs/Najee/Deebo) so the override JSON is hand-maintained — seeded from a WebFetch scrape
+  of `nfl.com/sitemap/html/rosters/2026` (all 32 teams, ~90-man) cross-checked vs nflverse
+  and the user's Sleeper draft-room export. 28 team relabels (`team_source` column on the
+  board), `out` drops (Mixon + Tyreek Hill, both unsigned/out of league), and an `adp`
+  override (Josh Jacobs — on the exempt list, Sleeper ADP slid to 146, still draftable so
+  fed into the market blend rather than dropped). Board-display + market-ADP only — no
+  projection/VBD change, no retrain. Revisit the automated nflverse path in early September
+  once its roster data firms up.
 
 ### Sun 08-30 night — validate + refine
 - Sanity-check the model: SHAP/feature-importance should show targets/carries/red-zone

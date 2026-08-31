@@ -220,3 +220,51 @@ def test_simulate_draft_is_deterministic_under_seed():
     a1 = simulate_draft(b, b.spec, 4, 15, np.random.default_rng(7))[0]
     a2 = simulate_draft(b, b.spec, 4, 15, np.random.default_rng(7))[0]
     assert a1.equals(a2)
+
+
+# --- 2026 roster overrides ------------------------------------------------
+
+def test_roster_2026_overrides_relabel_team_and_drop_out(tmp_path, monkeypatch):
+    import json
+    from applications import roster_2026 as r26
+
+    cfg = tmp_path / "ov.json"
+    cfg.write_text(json.dumps({
+        "team": {"A.J. Brown": "NE", "D.J. Moore": "BUF"},
+        "out": {"Joe Mixon": "unsigned"},
+        "adp": {"Josh Jacobs": 146},
+    }))
+    monkeypatch.setattr(r26, "_OVERRIDES", cfg)
+    team, out, adp = r26.load_overrides(cfg)
+    assert team == {"aj brown": "NE", "dj moore": "BUF"}
+    assert out == {"joe mixon"}
+    assert adp == {"josh jacobs": 146.0}
+
+    proj = pd.DataFrame({
+        "name": ["A.J. Brown", "DJ Moore", "Justin Jefferson", "Joe Mixon"],
+        "most_recent_team": ["PHI", "CHI", "MIN", "HOU"],
+    })
+    labeled = r26.apply_team_labels(proj)
+    assert list(labeled["most_recent_team"]) == ["NE", "BUF", "MIN", "HOU"]
+    assert list(labeled["team_changed"]) == [True, True, False, False]
+    assert list(labeled["team_source"]) == ["override", "override", "model", "model"]
+
+    board = proj.assign(vbd=[10.0, 9, 8, 7])
+    kept, dropped = r26.drop_unavailable(board)
+    assert dropped == ["Joe Mixon"]
+    assert "Joe Mixon" not in set(kept["name"])
+
+    b2 = pd.DataFrame({"name": ["Josh Jacobs", "Bijan Robinson"], "adp": [28.0, 2.0]})
+    forced, changed = r26.apply_adp_overrides(b2)
+    assert changed == ["Josh Jacobs"]
+    assert forced.set_index("name").loc["Josh Jacobs", "adp"] == 146.0
+    assert forced.set_index("name").loc["Bijan Robinson", "adp"] == 2.0
+
+
+def test_roster_2026_missing_override_file_is_a_noop(tmp_path, monkeypatch):
+    from applications import roster_2026 as r26
+    monkeypatch.setattr(r26, "_OVERRIDES", tmp_path / "does-not-exist.json")
+    assert r26.load_overrides(r26._OVERRIDES) == ({}, set(), {})
+    proj = pd.DataFrame({"name": ["X"], "most_recent_team": ["AA"]})
+    out = r26.apply_team_labels(proj)
+    assert list(out["most_recent_team"]) == ["AA"] and not out["team_changed"].any()

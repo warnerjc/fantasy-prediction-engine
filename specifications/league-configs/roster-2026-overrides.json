@@ -1,0 +1,47 @@
+{
+  "_comment": "Manual 2026 corrections for the draft board. The model labels players with their 2025 team, can't see offseason moves/cuts/suspensions, and blends against a cached crowd ADP that lags breaking news. Sources: nfl.com/sitemap/html/rosters/2026 (scraped 2026-08-31, ~90-man, pre-final-cuts) cross-checked vs nflverse roster_2026, CBS cut tracker, and the user's Sleeper draft-room data. Edit up to draft day. Names must match models/output/<league>_projections.csv 'name'; matching is punctuation/suffix-insensitive. Team abbreviations follow the board's convention (LA, LV, WAS, JAX).",
+
+  "team": {
+    "A.J. Brown": "NE",
+    "Kenneth Walker III": "KC",
+    "D.J. Moore": "BUF",
+    "Romeo Doubs": "NE",
+    "Kyler Murray": "MIN",
+    "Jaylen Waddle": "DEN",
+    "Mike Evans": "SF",
+    "Deebo Samuel": "SF",
+    "Christian Kirk": "SF",
+    "Travis Etienne": "NO",
+    "Noah Fant": "NO",
+    "Stefon Diggs": "WAS",
+    "Chigoziem Okonkwo": "WAS",
+    "Rachaad White": "WAS",
+    "Jerome Ford": "WAS",
+    "Wan'Dale Robinson": "TEN",
+    "Jauan Jennings": "MIN",
+    "Keenan Allen": "IND",
+    "David Njoku": "LAC",
+    "Isaiah Likely": "NYG",
+    "Najee Harris": "NYG",
+    "David Montgomery": "HOU",
+    "Kayshon Boutte": "HOU",
+    "Rico Dowdle": "PIT",
+    "Jonnu Smith": "GB",
+    "Marquise Brown": "PHI",
+    "Austin Hooper": "ATL",
+    "Darren Waller": "CAR"
+  },
+
+  "out": {
+    "Joe Mixon": "unsigned, not on a 2026 roster",
+    "Tyreek Hill": "unsigned free agent, out of the league (Nov 2025 knee injury)"
+  },
+
+  "adp": {
+    "Josh Jacobs": 146
+  },
+
+  "_notes": {
+    "Josh Jacobs": "On the commissioner's exempt list pending an NFL investigation — still drafted, but Sleeper ADP slid from ~top-25 to 146. The model can't see that; adp override feeds the real market signal into the blend. Draftable, not a drop."
+  }
+}
