@@ -169,6 +169,22 @@ def test_blend_market_fills_rookies_and_pulls_model_toward_adp():
     assert pd.notna(pure.set_index("name").loc["RookA", "vbd"])      # rookies still filled
 
 
+def test_blend_market_floors_model_at_the_market_value():
+    # a model row the model tanks (committee RB) must not fall below what its ADP
+    # implies -- otherwise it drops off the draftable board entirely.
+    n = 25
+    anchor = pd.DataFrame({
+        "name": [f"P{i}" for i in range(n)], "position": ["RB"] * n, "source": ["model"] * n,
+        "adp": np.linspace(1, 180, n), "vbd": np.linspace(150, -30, n),
+    })
+    tanked = pd.DataFrame({"name": ["Committee"], "position": ["RB"], "source": ["model"],
+                           "adp": [120.0], "vbd": [-140.0]})   # model hates him, market drafts him
+    out = _blend_market(pd.concat([anchor, tanked], ignore_index=True), weight=0.7).set_index("name")
+    r = out.loc["Committee"]
+    assert r["vbd"] >= r["market_vbd"] - 1e-6           # floored at market
+    assert r["vbd"] > r["model_vbd"]                    # lifted off the model's number
+
+
 def test_blend_market_per_position_weight_and_no_adp_pin():
     # anchor rows spanning the whole ADP range so the isotonic curve has a real,
     # low floor; then two QBs the model loves equally — one with a late ADP, one
@@ -214,12 +230,14 @@ def _sim_board(n_per_pos=30):
     rows = []
     for pos, base in (("QB", 300), ("RB", 260), ("WR", 250), ("TE", 200), ("K", 120), ("DEF", 130)):
         for i in range(n_per_pos):
+            vbd = float(base - i * 6)
             rows.append(dict(player_id=f"{pos}{i}", sleeper_id=f"s_{pos}{i}", name=f"{pos}{i}",
-                             position=pos, most_recent_team="AA", adp=np.nan,
-                             proj_ppg=(base - i * 6) / 15,
-                             vbd=float(base - i * 6), overall_rank=0, source="model"))
+                             position=pos, most_recent_team="AA",
+                             proj_ppg=(base - i * 6) / 15, proj_points=vbd + 120,
+                             vbd=vbd, tier=1 + i // 6, overall_rank=0, source="model"))
     df = pd.DataFrame(rows)
     df["overall_rank"] = df["vbd"].rank(ascending=False, method="first").astype(int)
+    df["adp"] = df["overall_rank"].astype(float)
     return DraftBoard(df.sort_values("vbd", ascending=False).reset_index(drop=True),
                       RosterSpec(teams=10, dedicated={"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1},
                                  flex=[frozenset({"RB", "WR", "TE"})]), set())
@@ -244,6 +262,84 @@ def test_simulate_draft_is_deterministic_under_seed():
     a1 = simulate_draft(b, b.spec, 4, 15, np.random.default_rng(7))[0]
     a2 = simulate_draft(b, b.spec, 4, 15, np.random.default_rng(7))[0]
     assert a1.equals(a2)
+
+
+def test_simulate_draft_resumes_from_a_partial_state():
+    from applications.mock import DraftStart, simulate_draft
+    b = _sim_board()
+    start = DraftStart(rosters={s: Counter({"RB": 1}) for s in range(1, 11)}, pick_no=31)
+    picks, mine = simulate_draft(b, b.spec, 4, 15, np.random.default_rng(0), start=start)
+    assert picks["pick_no"].min() == 31 and picks["pick_no"].max() == 150   # resumes, finishes
+    assert picks["name"].is_unique
+    # RB2 slot: 10 teams already hold 1 RB -> most add at most 2 more before caps
+    assert Counter(mine["position"])["RB"] <= 3
+
+
+def test_roster_value_scores_the_optimal_lineup():
+    from applications.mock import roster_value
+    b = _sim_board()
+    spec = RosterSpec(teams=10, dedicated={"QB": 1, "RB": 1}, flex=[frozenset({"RB", "WR"})])
+    roster = b.players.set_index("name").loc[["QB0", "RB0", "RB5", "WR0"]].reset_index()
+    # starts QB0 + best two of {RB0, RB5, WR0} for RB + flex
+    got = roster_value(roster, spec)
+    top3 = roster.nlargest(3, "vbd")["vbd"].sum()
+    assert got == pytest.approx(roster.loc[roster.name == "QB0", "vbd"].iloc[0]
+                                + roster.nlargest(2, "vbd").query("position != 'QB'")["vbd"].sum(),
+                                rel=0.01) or got == pytest.approx(top3, rel=0.01)
+
+
+# --- draft strategy + recommendation ------------------------------------
+
+def test_choose_initial_strategy_reads_roster_shape(monkeypatch):
+    from applications.draftplan import choose_initial_strategy
+
+    class R:  # minimal ScoringRules stand-in
+        per_unit = {"rec": 0.5}
+        position_bonuses: dict = {}
+
+    wr_heavy = RosterSpec(teams=12, dedicated={"QB": 1, "RB": 1, "WR": 1, "TE": 1},
+                          flex=[frozenset({"RB", "WR"}), frozenset({"WR", "TE"}), frozenset({"WR", "TE"})])
+    s, why = choose_initial_strategy(wr_heavy, R())
+    assert s.name == "wr_early"          # WR-heavy roster -> WR-lean starting guess
+
+    rb_heavy = RosterSpec(teams=12, dedicated={"QB": 1, "RB": 2, "WR": 2, "TE": 1},
+                          flex=[frozenset({"RB", "WR"})])
+    R.per_unit = {"rec": 0.0}
+    assert choose_initial_strategy(rb_heavy, R())[0].name == "rb_early"
+
+    superflex = RosterSpec(teams=12, dedicated={"QB": 1, "RB": 2, "WR": 2, "TE": 1},
+                           flex=[frozenset({"QB", "RB", "WR", "TE"})])
+    assert choose_initial_strategy(superflex, R())[0].name == "qb_early"
+
+
+def _draft_state(b, picks_made):
+    """A Sleeper-style draft_state: fill `picks_made` picks off the top of the board."""
+    order = []
+    teams = b.spec.teams
+    for r in range(picks_made // teams + 2):
+        seats = range(1, teams + 1) if r % 2 == 0 else range(teams, 0, -1)
+        order += list(seats)
+    top = b.players.sort_values("vbd", ascending=False).head(picks_made)
+    picks = [{"player_id": sid, "draft_slot": order[i], "pick_no": i + 1,
+              "metadata": {"position": pos}}
+             for i, (sid, pos) in enumerate(zip(top["sleeper_id"], top["position"]))]
+    return {"picks": picks, "status": "drafting", "teams": teams, "rounds": 15}
+
+
+def test_recommend_never_reaches_and_lists_players_to_wait_on():
+    from applications.draftplan import STRATEGIES, recommend
+    b = _sim_board()
+    st = _draft_state(b, picks_made=24)          # your slot-4 pick #25 in a 10-team
+    rec = recommend(b, st, my_slot=4, spec=b.spec, strategy=STRATEGIES["bpa"], rounds=15)
+
+    assert rec["current_pick"] == 25 and rec["my_next_pick"] == 37
+    names = {r["name"] for r in rec["recommendations"]}
+    waits = {w["name"] for w in rec["wait"]}
+    # a "wait" player's ADP is past your next pick; a "draft now" player's isn't far past it
+    for w in rec["wait"]:
+        assert w["adp"] > rec["my_next_pick"]
+    assert names and not (names & waits)
+    assert rec["landscape"]["RB"]["startable_left"] >= 0
 
 
 # --- 2026 roster overrides ------------------------------------------------

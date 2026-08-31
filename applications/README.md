@@ -3,7 +3,41 @@
 Consumes `/models` projections and `/scoring` as black boxes. Never re-derives a
 projection or a point value here.
 
-## draft_tool.py — snake draft assistant
+## draft_ui.py — browser draft assistant (the one to use on draft day)
+
+```
+bin/draft-ui --league sleeper --draft <id> --slot 4     # then open localhost:8000
+```
+
+A tiny Flask server + one auto-refreshing page (`Cache-Control: no-store`, 1.5 s
+poll). A background thread polls the Sleeper draft; each new pick recomputes the
+recommendation, and once per round — only while your next pick is >5 away, never
+on the clock — it re-runs the strategy simulation on a separate thread. The
+`--draft` id comes from the draft-room URL (`sleeper.com/draft/nfl/<id>`) — a
+mock draft isn't attached to your league so it can't be looked up.
+
+**Strategy is a simulator output, not a hand-tuned table** (`draftplan.py`). Three
+*tilts* — `bpa` / `rb_early` / `wr_early` (+ `qb_early` in superflex), each a small
+early-rounds nudge. `evaluate` runs `mock.simulate_draft` from your actual slot +
+current roster + who's already gone under each tilt (~16 sims each) and commits to
+the one whose *starting lineup* ends up most valuable (small hysteresis so noise
+doesn't flip-flop). Draft-slot effects fall out for free — your slot is a sim
+input. `choose_initial_strategy` is just a first guess until that first sim runs.
+
+**Recommendations never tell you to reach.** `recommend` ranks the available pool
+by `tilt × roster-need × positional scarcity × ADP-urgency × dart-penalty × value`,
+with an **elite-value override** (a top-of-tier player who falls to you is
+recommended regardless of tilt) and **structural rules** that aren't tunable: TE /
+QB (1-QB) / K / DEF are 1-and-done, K/DEF only in the last two rounds. A player
+whose ADP is past your next pick is down-weighted and listed under "can wait" with
+the pick he should last to. A **💡 takeaway** line gives the one-sentence read
+("RB is running — take X now" / "nothing you need is going now — take value X,
+grab TE at #69") and leads the card list. The page also shows a per-position
+**landscape** (startable left, best available, ⚠ RUN).
+
+`draft_tool.py --watch` (below) stays as a terminal fallback.
+
+## draft_tool.py — snake draft assistant (terminal)
 
 ```
 python -m models.build --league sleeper          # refresh projections first

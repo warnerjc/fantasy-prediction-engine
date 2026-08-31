@@ -182,7 +182,11 @@ def _blend_market(board: pd.DataFrame, weight: float,
     if weight < 1.0:
         w = board["position"].map(lambda p: per_pos.get(p, weight)).astype(float)
         both = m.notna() & mkt.notna()
-        board.loc[both, "vbd"] = w[both] * m[both] + (1 - w[both]) * mkt[both]
+        blended = w[both] * m[both] + (1 - w[both]) * mkt[both]
+        # the model may pull a player *up* toward the market but not *below* it: a
+        # deeply-negative model VBD (thin-sample / committee RBs the model tanks)
+        # shouldn't bury a player the market still drafts. See draft-sprint-plan.md.
+        board.loc[both, "vbd"] = np.maximum(blended, mkt[both])
     return board
 
 

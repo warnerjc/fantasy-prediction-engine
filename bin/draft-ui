@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Browser draft assistant. e.g.  bin/draft-ui --league sleeper --draft <id> --slot 4
+cd "$(dirname "$0")/.." || exit 1
+exec .venv/bin/python -m applications.draft_ui "$@"

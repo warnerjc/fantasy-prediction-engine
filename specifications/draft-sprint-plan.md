@@ -177,6 +177,40 @@ tool) is done Friday. 55 tests. Remaining is validation + polish, not building:
   projection/VBD change, no retrain. Revisit the automated nflverse path in early September
   once its roster data firms up.
 
+- [x] **Draft assistant v2** — a live-mock dry run showed the terminal `--watch` was unusable
+  on the clock, was a value board with no roster/room/strategy awareness, and recommended
+  reaching. Built:
+  - `applications/draft_ui.py` — Flask + one auto-refreshing page (`bin/draft-ui`), background
+    thread polls Sleeper, recomputes per pick.
+  - `applications/draftplan.py` — `choose_initial_strategy` (from effective roster shape +
+    scoring; the user's WR-flex-heavy league → `zero_rb`), `evaluate` (per-round rest-of-draft
+    simulation under every format-appropriate strategy, reuses `mock.simulate_draft` resumed
+    mid-draft), `recommend` (strategy-fit × roster-need × scarcity × never-reach ADP lean +
+    positional landscape).
+  - `board.py` `_blend_market`: VBD floored at the market value (Pacheco #563 → ~#400).
+  - `mock.simulate_draft` refactored: resumable + `my_strategy` param; new `roster_value`.
+  - `flask` added to `requirements.txt`. 76 tests. Terminal `--watch` kept as fallback.
+  - Mock dry-runs (Sun night): rounds 1–5 recs were good; after that the tool **got stuck on
+    TE** — once you had a starting TE it kept recommending a 2nd TE over RB/WR depth (a
+    backup TE is near-worthless in a 1-TE league). Also recommended positions you "needed"
+    even when every option there would clearly last to your next pick.
+    Fixes: `_fit` treats TE / QB (non-superflex) / K / DEF as **1-and-done**; steeper
+    never-reach urgency; a **💡 takeaway** headline that also leads the cards.
+  - **Strategy is now simulator output, not a hand-tuned table** (per user — overfitting
+    concern). Collapsed 6 weight tables → 3 *tilts* (`bpa` / `rb_early` / `wr_early`,
+    + `qb_early` superflex), each a small early-rounds nudge. `evaluate` runs the
+    resumable sim from your real slot + roster + board state under each tilt (~16 sims,
+    ~1.5s) and **commits** to the best-starting-lineup one (first eval outright, then
+    hysteresis ≥4 pts). Draft-slot effects fall out for free. Plus an **elite-value
+    override** (a top-of-tier player who falls to you is recommended regardless of tilt —
+    fixed "Gibbs fell to me and wasn't on the list"). Weights bounded ~[0.7,1.35], round 1
+    near-neutral.
+  - **UI hardening**: `Cache-Control: no-store` (stale-page bug), whole render wrapped in
+    try/catch, always-visible heartbeat clock (red if the fetch loop stalls), `seen_picks`
+    only advances after a successful compute (was freezing the page permanently on one
+    exception), `⚠ engine stuck` banner after >12s with no update. 1.5s poll.
+  - Needs a full live re-test.
+
 ### Sun 08-30 night — validate + refine
 - Sanity-check the model: SHAP/feature-importance should show targets/carries/red-zone
   touches/snaps dominating. If something else dominates, treat it as a leakage bug, not a

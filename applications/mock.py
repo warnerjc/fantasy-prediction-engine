@@ -73,6 +73,34 @@ class _Roster:
         return -0.5 * (have - startable)               # penalty for piling on
 
 
+@dataclass
+class DraftStart:
+    """Resume a simulation from a real draft in progress."""
+    rosters: dict[int, Counter]   # slot -> positions already drafted by that slot
+    pick_no: int                  # the next overall pick number (1-based)
+
+
+def roster_value(roster: pd.DataFrame, spec: RosterSpec) -> float:
+    """Value of a roster's *optimal starting lineup*: fill each dedicated slot with
+    the position's best player, each flex with the best eligible player left, and
+    sum their ``vbd`` (points over positional replacement — already discounts QB,
+    where streaming is cheap). Bench doesn't count."""
+    if roster.empty or "vbd" not in roster.columns:
+        return 0.0
+    pool = roster.dropna(subset=["vbd"]).sort_values("vbd", ascending=False)
+    used: set = set()
+    total = 0.0
+    for pos, n in spec.dedicated.items():
+        picks = pool[(pool["position"] == pos) & ~pool.index.isin(used)].head(n)
+        total += float(picks["vbd"].sum())
+        used |= set(picks.index)
+    for elig in spec.flex:
+        cand = pool[pool["position"].isin(elig) & ~pool.index.isin(used)].head(1)
+        total += float(cand["vbd"].sum())
+        used |= set(cand.index)
+    return total
+
+
 def simulate_draft(
     board: DraftBoard,
     spec: RosterSpec,
@@ -81,58 +109,88 @@ def simulate_draft(
     rng: np.random.Generator,
     opp_temp: float = 6.0,
     my_need_weight: float = 0.35,
+    *,
+    my_strategy=None,
+    start: DraftStart | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """One full draft. Returns (all picks, my roster)."""
+    """One full (or resumed) draft. Returns (picks made this call, my picks this call).
+
+    ``start`` resumes an in-progress draft: seed each slot's roster counts and the
+    next pick number. ``my_strategy`` (a ``draftplan.Strategy``) re-weights our
+    seat's pick by ``strategy.weight(position, round)``.
+    """
     caps = _position_caps(spec)
     required = _required_slots(spec)
     alloc = spec.flex_allocation()
     startable = {p: spec.dedicated.get(p, 0) + alloc.get(p, 0.0) for p in SCORABLE}
-    pool = board.players.dropna(subset=["vbd"]).sort_values("vbd", ascending=False).reset_index(drop=True)
-    pool = pool.copy()
-    pool["adp_fill"] = pool["adp"].fillna(pool["overall_rank"] + 40)
-    taken: set[int] = set()
-    rosters = {s: _Roster() for s in range(1, spec.teams + 1)}
-    my_picks_left = {s: sum(1 for x in _snake_order(spec.teams, rounds) if x == s) for s in rosters}
+
+    # cap the pool: nobody past ~(picks + a buffer) gets drafted, and the hot loop
+    # is O(pool) per pick.
+    keep = spec.teams * rounds + 60
+    pool = (board.available.dropna(subset=["vbd"])
+            .sort_values("vbd", ascending=False).head(keep).reset_index(drop=True))
+    n = len(pool)
+    pos = pool["position"].to_numpy()
+    vbd = pool["vbd"].to_numpy(dtype=float)
+    adp_fill = pool["adp"].fillna(pool["overall_rank"] + 40).to_numpy(dtype=float)
+    vbd_pos_mean = float(np.clip(vbd, 0, None).mean())
+    alive = np.ones(n, dtype=bool)
+
+    rosters = {s: _Roster(Counter(start.rosters.get(s, {})) if start else Counter())
+               for s in range(1, spec.teams + 1)}
+    first = start.pick_no if start else 1
+    order = _snake_order(spec.teams, rounds)
+    my_picks_left = {s: sum(1 for i, x in enumerate(order, 1) if x == s and i >= first)
+                     for s in rosters}
     picks = []
 
-    for pick_no, slot in enumerate(_snake_order(spec.teams, rounds), start=1):
-        avail = pool[~pool.index.isin(taken)]
-        if avail.empty:
+    for pick_no, slot in enumerate(order, start=1):
+        if pick_no < first:
+            continue
+        idx = np.flatnonzero(alive)
+        if idx.size == 0:
             break
         rd = rosters[slot]
+        rnd = (pick_no - 1) // spec.teams + 1
         my_picks_left[slot] -= 1
+        apos = pos[idx]
 
-        under_cap = avail[avail["position"].map(lambda p: rd.counts[p] < caps.get(p, 99))]
-        unmet = {p: n - rd.counts[p] for p, n in required.items() if rd.counts[p] < n}
-
-        if my_picks_left[slot] < sum(unmet.values()):        # must start filling required slots
-            forced = avail[avail["position"].isin(unmet)]
-            pick_from = forced if not forced.empty else (under_cap if not under_cap.empty else avail)
+        under_cap = idx[np.array([rd.counts[p] < caps.get(p, 99) for p in apos])]
+        unmet = {p: req - rd.counts[p] for p, req in required.items() if rd.counts[p] < req}
+        if my_picks_left[slot] < sum(unmet.values()) and unmet:      # must fill required slots
+            forced = idx[np.isin(apos, list(unmet))]
+            cand_idx = forced if forced.size else (under_cap if under_cap.size else idx)
         else:
-            pick_from = under_cap if not under_cap.empty else avail
+            cand_idx = under_cap if under_cap.size else idx
 
+        cpos = pos[cand_idx]
         if slot == my_slot:
-            fit = pick_from["position"].map(lambda p: rd.fit(p, startable[p]))
-            score = pick_from["vbd"] + my_need_weight * fit * pick_from["vbd"].clip(lower=0).mean()
-            choice = score.idxmax()
+            fit = np.array([rd.fit(p, startable[p]) for p in cpos])
+            score = vbd[cand_idx] + my_need_weight * fit * vbd_pos_mean
+            if my_strategy is not None:
+                score = score * np.array([my_strategy.weight(p, rnd) for p in cpos])
+            choice = int(cand_idx[np.argmax(score)])
         else:
-            cand = pick_from.nsmallest(14, "adp_fill")
-            logits = -cand["adp_fill"].to_numpy() / opp_temp
+            k = min(14, cand_idx.size)
+            near = cand_idx[np.argsort(adp_fill[cand_idx])[:k]]
+            logits = -adp_fill[near] / opp_temp
             w = np.exp(logits - logits.max())
-            w = w / w.sum()
-            choice = rng.choice(cand.index.to_numpy(), p=w)
+            choice = int(rng.choice(near, p=w / w.sum()))
 
-        taken.add(choice)
-        row = pool.loc[choice]
-        rosters[slot].add(row["position"])
+        alive[choice] = False
+        rosters[slot].add(pos[choice])
         picks.append({
-            "pick_no": pick_no, "round": (pick_no - 1) // spec.teams + 1, "slot": slot,
-            "name": row["name"], "position": row["position"], "team": row["most_recent_team"],
-            "adp": row["adp"], "vbd": row["vbd"], "is_mine": slot == my_slot,
+            "pick_no": pick_no, "round": rnd, "slot": slot,
+            "name": pool.at[choice, "name"], "position": pos[choice],
+            "team": pool.at[choice, "most_recent_team"],
+            "adp": pool.at[choice, "adp"], "vbd": vbd[choice],
+            "proj_points": pool.at[choice, "proj_points"] if "proj_points" in pool.columns else np.nan,
+            "is_mine": slot == my_slot,
         })
 
     pdf = pd.DataFrame(picks)
-    return pdf, pdf[pdf["is_mine"]].reset_index(drop=True)
+    mine = pdf[pdf["is_mine"]].reset_index(drop=True) if not pdf.empty else pdf
+    return pdf, mine
 
 
 def _print_single(picks: pd.DataFrame, mine: pd.DataFrame, spec: RosterSpec) -> None:

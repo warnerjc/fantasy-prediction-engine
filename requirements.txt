@@ -16,6 +16,9 @@ lightgbm==4.7.0
 scikit-learn==1.9.0      # IsotonicRegression (ADP→VBD), metrics
 scipy==1.18.1            # spearmanr
 
+# applications
+flask==3.1.3             # draft_ui.py — local browser draft assistant
+
 # storage / dev
 sqlite-utils==4.2.1
 pytest==9.1.1
