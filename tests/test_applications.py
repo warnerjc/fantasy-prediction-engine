@@ -98,6 +98,30 @@ def test_drafted_players_drop_off_the_board():
     assert len(b2.available) == len(b.players) - 5
 
 
+def test_build_board_sleeper_id_matches_sleeper_pick_ids(tmp_path, monkeypatch):
+    # regression: player_ids stored sleeper_id float-formatted ("9493.0"), which
+    # never matched Sleeper's pick ids ("9493") -> drafted players never left the
+    # board during a live draft.
+    import applications.board as bd
+
+    proj = pd.DataFrame({
+        "position": ["WR", "RB", "DEF"], "name": ["Puka Nacua", "Bijan Robinson", "SEA"],
+        "most_recent_team": ["LA", "ATL", "SEA"], "player_id": ["00-0039075", "00-0009509", "SEA"],
+        "proj_ppg": [17.9, 22.4, 10.7], "proj_points": [277.0, 337.0, 182.0],
+        "target_season": [2026, 2026, 2026],
+    })
+    proj.to_csv(tmp_path / "sleeper_projections.csv", index=False)
+    monkeypatch.setattr(bd, "read_sql", lambda q: pd.DataFrame(
+        {"gsis_id": ["00-0039075", "00-0009509"], "sleeper_id": pd.array(["9493.0", "9509.0"], dtype="string")}))
+
+    spec = RosterSpec(teams=12, dedicated={"WR": 2, "RB": 2, "DEF": 1}, flex=[])
+    board = bd.build_board("sleeper", spec, projections_dir=tmp_path, adp=None)
+
+    assert set(board.players["sleeper_id"]) == {"9493", "9509", "SEA"}   # no ".0"
+    drafted = board.with_drafted({"9493"})                              # Sleeper pick id form
+    assert "Puka Nacua" not in set(drafted.available["name"])
+
+
 def test_normalize_name_strips_suffixes_and_punctuation():
     assert normalize_name("Marvin Harrison Jr.") == "marvin harrison"
     assert normalize_name("D.J. Moore") == "dj moore"

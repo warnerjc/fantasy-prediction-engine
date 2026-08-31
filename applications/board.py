@@ -200,8 +200,10 @@ def build_board(
 
     xref = read_sql("SELECT gsis_id, sleeper_id FROM player_ids").rename(columns={"gsis_id": "player_id"})
     proj = proj.merge(xref, on="player_id", how="left")
-    # DEF rows carry the team abbrev as player_id; Sleeper uses that as its DEF id
-    proj["sleeper_id"] = proj["sleeper_id"].fillna(proj["player_id"]).astype(str)
+    # DEF rows carry the team abbrev as player_id; Sleeper uses that as its DEF id.
+    # Strip any trailing ".0" (float-formatted id) so it matches Sleeper's pick ids.
+    proj["sleeper_id"] = (proj["sleeper_id"].fillna(proj["player_id"]).astype(str)
+                          .str.replace(r"\.0$", "", regex=True))
     proj["source"] = "model"
 
     # current-season team labels (offseason moves the model can't see)

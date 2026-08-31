@@ -227,7 +227,13 @@ def player_ids() -> pd.DataFrame:
             "draft_year", "draft_round", "draft_pick", "draft_ovr"]
     df = df[[c for c in keep if c in df.columns]]
     df = df.dropna(subset=["gsis_id"]).drop_duplicates(subset=["gsis_id"])
+    # these arrive as float columns (NaNs force it) -> a naive .astype("string")
+    # yields "9493.0", which never matches Sleeper's "9493" pick ids. Format as
+    # integers first.
     for c in ("sleeper_id", "yahoo_id", "espn_id", "mfl_id"):
         if c in df.columns:
-            df[c] = df[c].astype("string")
+            df[c] = (
+                pd.to_numeric(df[c], errors="coerce")
+                .astype("Int64").astype("string")
+            )
     return df.reset_index(drop=True)
