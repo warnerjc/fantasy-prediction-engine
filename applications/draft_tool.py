@@ -19,7 +19,7 @@ import pandas as pd
 
 from models.leagues import CONFIG_DIR, LEAGUES
 from . import sleeper
-from .adp import adp_for_league
+from .adp import adp_for_league, sleeper_adp
 from .board import build_board
 from .roster import roster_spec
 
@@ -27,7 +27,7 @@ pd.set_option("display.width", 200)
 pd.set_option("display.max_columns", 30)
 
 _LEAGUE_ID = {"sleeper": "1356741521163968513", "yahoo": "236625"}
-_COLS = ["overall_rank", "tier", "name", "pos", "team", "proj_ppg", "adp", "vbd"]
+_COLS = ["overall_rank", "tier", "name", "pos", "team", "proj_ppg", "adp", "sleeper_adp", "vbd"]
 
 
 def _load_config(league: str) -> dict:
@@ -45,7 +45,7 @@ def _fmt(df: pd.DataFrame) -> str:
     if "tier" in show:
         show["tier"] = show["tier"].astype("string").fillna("-")
     show = show[[c for c in _COLS if c in show.columns]]
-    for c in ("proj_ppg", "vbd", "adp"):
+    for c in ("proj_ppg", "vbd", "adp", "sleeper_adp"):
         if c in show:
             show[c] = show[c].round(1)
     return show.to_string(index=False, na_rep="-")
@@ -86,8 +86,17 @@ def _projection_season(league: str) -> int:
     return int(df["target_season"].iloc[0])
 
 
-def _build(league: str, spec, use_adp: bool, season: int | None, blend: float):
-    adp = players = None
+def _resolve_ref_drafts(cli_val: str | None, cfg: dict) -> list[str]:
+    """CLI --ref-drafts (comma-separated) wins; else a `ref_draft_ids` list in the
+    league config; else none."""
+    if cli_val:
+        return [s.strip() for s in cli_val.split(",") if s.strip()]
+    return [str(d) for d in (cfg.get("ref_draft_ids") or [])]
+
+
+def _build(league: str, spec, use_adp: bool, season: int | None, blend: float,
+           ref_draft_ids: list[str] | None = None):
+    adp = players = ref_adp = None
     if use_adp:
         season = season or _projection_season(league)
         try:
@@ -95,12 +104,19 @@ def _build(league: str, spec, use_adp: bool, season: int | None, blend: float):
             players = sleeper.all_players()
         except Exception as e:
             print(f"(ADP unavailable, model-only board: {e})")
-    return build_board(league, spec, adp=adp, sleeper_players=players, blend=blend)
+    if ref_draft_ids:
+        try:
+            ref_adp = sleeper_adp(ref_draft_ids)
+            print(f"Sleeper ADP: {len(ref_adp)} players from {len(ref_draft_ids)} draft(s)")
+        except Exception as e:
+            print(f"(Sleeper ADP unavailable: {e})")
+    return build_board(league, spec, adp=adp, sleeper_players=players, blend=blend,
+                       ref_adp=ref_adp)
 
 
 _EXPORT_COLS = ["overall_rank", "position", "pos_rank", "tier", "name", "most_recent_team",
-                "team_source", "proj_ppg", "proj_points", "adp", "vbd", "model_vbd",
-                "market_vbd", "source", "is_rookie"]
+                "team_source", "proj_ppg", "proj_points", "adp", "sleeper_adp", "vbd",
+                "model_vbd", "market_vbd", "source", "is_rookie"]
 
 
 def _export(board, league: str) -> Path:
@@ -108,7 +124,7 @@ def _export(board, league: str) -> Path:
     df = board.players.sort_values("vbd", ascending=False).copy()
     df["pos_rank"] = df.groupby("position")["vbd"].rank(ascending=False, method="first").astype("Int64")
     out = df[[c for c in _EXPORT_COLS if c in df.columns]].copy()
-    for c in ("proj_ppg", "proj_points", "adp", "vbd", "model_vbd", "market_vbd"):
+    for c in ("proj_ppg", "proj_points", "adp", "sleeper_adp", "vbd", "model_vbd", "market_vbd"):
         if c in out:
             out[c] = out[c].round(1)
     path = PROJECTIONS_DIR / f"{league}_board.csv"
@@ -118,10 +134,11 @@ def _export(board, league: str) -> Path:
 
 def run(league: str, slot: int | None, watch: bool, draft_id: str | None,
         interval: int, use_adp: bool, season: int | None, blend: float,
-        export: bool = False, replay: bool = False) -> None:
+        export: bool = False, replay: bool = False, ref_drafts: str | None = None) -> None:
     cfg = _load_config(league)
     spec = roster_spec(cfg)
-    board = _build(league, spec, use_adp, season, blend)
+    board = _build(league, spec, use_adp, season, blend,
+                   ref_draft_ids=_resolve_ref_drafts(ref_drafts, cfg))
     mix = "model only" if (blend >= 1.0 or not use_adp) else f"{blend:.0%} model / {1 - blend:.0%} ADP"
     print(f"{league}: {spec.teams} teams  |  VBD = {mix}  |  replacement ranks {spec.replacement_rank()}")
 
@@ -192,9 +209,12 @@ def main() -> None:
                     help="write the full ranked board to models/output/<league>_board.csv")
     ap.add_argument("--replay", action="store_true",
                     help="fast-forward a completed Sleeper draft through the live view (needs --draft)")
+    ap.add_argument("--ref-drafts", default=None,
+                    help="comma-separated completed Sleeper draft ids — show their empirical "
+                         "ADP next to the crowd ADP (default: league config's ref_draft_ids)")
     args = ap.parse_args()
     run(args.league, args.slot, args.watch, args.draft, args.interval,
-        not args.no_adp, args.season, args.blend, args.export, args.replay)
+        not args.no_adp, args.season, args.blend, args.export, args.replay, args.ref_drafts)
 
 
 if __name__ == "__main__":

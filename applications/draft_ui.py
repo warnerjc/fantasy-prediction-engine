@@ -24,7 +24,7 @@ from flask import Flask, jsonify
 from models.leagues import load_rules
 
 from . import sleeper
-from .draft_tool import _build, _load_config, _projection_season
+from .draft_tool import _build, _load_config, _projection_season, _resolve_ref_drafts
 from .draftplan import choose_initial_strategy, evaluate, recommend
 from .roster import roster_spec
 
@@ -34,14 +34,15 @@ EVAL_SIMS = 14
 
 
 class AppState:
-    def __init__(self, league: str, draft_id: str, my_slot: int):
+    def __init__(self, league: str, draft_id: str, my_slot: int, ref_drafts: str | None = None):
         self.league, self.draft_id, self.my_slot = league, draft_id, my_slot
         cfg = _load_config(league)
         self.spec = roster_spec(cfg)
         self.rules = load_rules(league)
         self.rounds = None
         self.board = _build(league, self.spec, use_adp=True,
-                            season=_projection_season(league), blend=0.7)
+                            season=_projection_season(league), blend=0.7,
+                            ref_draft_ids=_resolve_ref_drafts(ref_drafts, cfg))
         self.strategy, why = choose_initial_strategy(self.spec, self.rules)
         self.strategy_log = [{"round": 0, "to": self.strategy.name, "why": why}]
         self.lock = threading.Lock()
@@ -170,43 +171,70 @@ def create_app(state: AppState) -> Flask:
 _PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <title>draft</title><style>
  :root{color-scheme:dark}
+ *{box-sizing:border-box}
  body{margin:0;background:#12141a;color:#e8e8ea;font:16px/1.4 system-ui,sans-serif}
- #app{max-width:760px;margin:0 auto;padding:18px}
- h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#8a8f9a;margin:22px 0 8px}
- .hdr{font-size:15px;color:#b8bcc4;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}
- .clock{font-size:26px;font-weight:700;color:#fff}
- .strat{background:#1c1f27;border-radius:10px;padding:12px 14px;margin-top:10px}
- .strat b{color:#7db4ff;font-size:17px}
- .strat .why{color:#9aa0ab;font-size:14px;margin-top:2px}
- .strat .log{color:#6f7580;font-size:12px;margin-top:6px}
- .card{background:#1c1f27;border-left:4px solid #7db4ff;border-radius:8px;padding:10px 13px;margin:7px 0;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
- .card .nm{font-size:19px;font-weight:700}
- .card .meta{color:#9aa0ab;font-size:13px}
- .card .tm{text-align:right;font-size:13px;color:#c7ccd4;white-space:nowrap}
+ #wrap{max-width:1180px;margin:0 auto;padding:12px 16px}
+ #frame{border:2px solid #2f7a44;border-radius:12px;padding:12px 14px;transition:border-color .3s}
+ #frame.updating{border-color:#c98f28;animation:pulse 1.1s ease-in-out infinite}
+ #frame.stuck{border-color:#c0392b}
+ @keyframes pulse{0%,100%{border-color:#c98f28}50%{border-color:#5c430f}}
+ #pill{position:fixed;top:10px;right:12px;font-size:12px;font-weight:700;padding:5px 11px;border-radius:20px;z-index:5}
+ #pill.ready{background:#173a1f;color:#8be8a4}
+ #pill.updating{background:#3a2e12;color:#ffcf8a}
+ #pill.stuck{background:#3a1714;color:#ff9b8a}
+ h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#8a8f9a;margin:14px 0 6px}
+ h2:first-child{margin-top:2px}
+ .hdr{font-size:14px;color:#b8bcc4;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}
+ .strat{background:#1c1f27;border-radius:10px;padding:9px 12px;margin-top:8px}
+ .strat b{color:#7db4ff;font-size:16px}
+ .strat .why{color:#9aa0ab;font-size:13px;margin-top:2px}
+ .strat .log{color:#6f7580;font-size:12px;margin-top:5px}
+ .card{background:#1c1f27;border-left:4px solid #7db4ff;border-radius:8px;padding:8px 11px;margin:6px 0;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+ .card .nm{font-size:17px;font-weight:700}
+ .card .meta{color:#9aa0ab;font-size:12px}
+ .card .tm{text-align:right;font-size:12px;color:#c7ccd4;white-space:nowrap}
  .card.wait{border-left-color:#4a4f5a;opacity:.85}
- .card.wait .nm{font-size:16px;font-weight:600}
- table{width:100%;border-collapse:collapse;font-size:14px}
- td,th{text-align:left;padding:5px 8px;border-bottom:1px solid #23262f}
+ .card.wait .nm{font-size:15px;font-weight:600}
+ .sadp{color:#c7ccd4}
+ .sadp.reach{color:#ff9b5c;font-weight:700}
+ table{width:100%;border-collapse:collapse;font-size:13px}
+ td,th{text-align:left;padding:4px 7px;border-bottom:1px solid #23262f}
  th{color:#8a8f9a;font-weight:600}
  .run{color:#ff9b5c;font-weight:700}
  .roster span{display:inline-block;background:#1c1f27;border-radius:6px;padding:3px 9px;margin:3px 4px 0 0;font-size:13px}
- .big{font-size:20px;color:#fff;margin:30px 0}
- .banner{border-radius:10px;padding:14px 16px;margin:10px 0 12px;font-size:21px;font-weight:700;border:2px solid transparent}
+ .big{font-size:20px;color:#fff;margin:24px 0}
+ .banner{border-radius:10px;padding:11px 14px;margin:8px 0 10px;font-size:19px;font-weight:700;border:2px solid transparent}
  .banner.ready{background:#173a1f;color:#8be8a4;border-color:#2f7a44}
- .banner.updating{background:#3a2e12;color:#ffcf8a;border-color:#c98f28;animation:pulse 1s ease-in-out infinite}
- .banner.idle{background:#1c1f27;color:#c7ccd4;font-weight:600;font-size:16px}
- @keyframes pulse{0%,100%{border-color:#c98f28}50%{border-color:#6b4f16}}
- .sub{font-size:12px;color:#6f7580;margin:-6px 0 12px}
- .take{font-size:16px;color:#e8e8ea;background:#1c1f27;border-radius:8px;padding:11px 14px;margin:0 0 14px}
- .beat{font-size:11px;color:#5a5f6a;text-align:right;margin-bottom:6px}
+ .banner.updating{background:#3a2e12;color:#ffcf8a;border-color:#c98f28}
+ .banner.idle{background:#1c1f27;color:#c7ccd4;font-weight:600;font-size:15px}
+ .take{font-size:15px;color:#e8e8ea;background:#1c1f27;border-radius:8px;padding:10px 13px;margin:8px 0 2px}
+ .beat{font-size:11px;color:#5a5f6a;text-align:right;margin-bottom:4px}
  .beat.dead{color:#ff7a7a}
-</style></head><body><div id=beat class=beat>connecting…</div><div id=app>loading…</div>
+ #cols{display:grid;gap:16px;margin-top:8px}
+ @media(min-width:900px){
+   #cols{grid-template-columns:1.35fr 1fr;align-items:start}
+   #left,#right{max-height:calc(100dvh - 150px);overflow:auto}
+ }
+</style></head><body>
+<div id=pill></div>
+<div id=wrap>
+ <div id=beat class=beat>connecting…</div>
+ <div id=frame><div id=app>loading…</div></div>
+</div>
 <script>
 const g=id=>document.getElementById(id)
 const num=x=>(x==null||Number.isNaN(x))?'–':x
+function adpBits(r){
+ let s=`ADP ${num(r.adp)}`
+ if(r.sleeper_adp!=null){
+   const reach=(r.adp!=null && r.sleeper_adp-r.adp>=15)
+   s+=` · <span class="sadp${reach?' reach':''}">Sleeper ${num(r.sleeper_adp)}</span>`
+ }
+ return s
+}
 function card(r,wait){
  return `<div class="card${wait?' wait':''}">
-  <div><div class=nm>${r.name}</div><div class=meta>${r.position} · ${r.team||''} · proj ${num(r.proj_ppg)} · ADP ${num(r.adp)}</div></div>
+  <div><div class=nm>${r.name}</div><div class=meta>${r.position} · ${r.team||''} · proj ${num(r.proj_ppg)} · ${adpBits(r)}</div></div>
   <div class=tm>${wait? (r.note||'') : (r.timing||'')}${r.why&&!wait?'<br>'+r.why:''}</div></div>`
 }
 function land(L){
@@ -216,13 +244,27 @@ function land(L){
   <td>${v.gone_by_next||0} gone by your pick</td></tr>`).join('')
  return `<table><tr><th>pos</th><th>startable</th><th>best available</th><th></th></tr>${rows}</table>`
 }
-let lastOk=Date.now()
+function setState(cls,label){
+ g('frame').className=cls==='ready'?'':cls
+ const p=g('pill'); p.className=cls; p.textContent=label
+}
+let lastOk=Date.now(), lastPick=-1, thinkUntil=0
 function render(s){
  const a=g('app')
  if(s.status==='pre_draft'||s.status==='starting'){
+   setState('updating','⟳ waiting for draft')
    a.innerHTML=`<div class=strat><b>${s.strategy?.name||'…'}</b><div class=why>${s.strategy?.blurb||''}</div></div>
    <div class=big>${s.message||'Starting…'}</div>`; return }
  const st=s.engine_state, yt=s.your_turn
+ // a new pick landed -> hold the "thinking" state visible for ~1.4s even if the
+ // engine recomputes faster than we poll (otherwise it never leaves green)
+ const pk=(s.live_pick!=null?s.live_pick:s.picks_made)||0
+ if(lastPick>=0 && pk>lastPick) thinkUntil=Date.now()+1400
+ lastPick=pk
+ const thinking = st!=='ready' || !s.caught_up || Date.now()<thinkUntil
+ if(st==='stuck') setState('stuck','⚠ engine stuck')
+ else if(thinking) setState('updating','⟳ thinking…')
+ else setState('ready','✓ recs ready')
  let banner
  if(st==='stuck') banner=`<div class="banner updating">⚠ engine stuck (${s.stale_for}s) — check the terminal, or use Sleeper's ADP for this pick</div>`
  else if(yt && st==='ready') banner=`<div class="banner ready">✅ YOUR PICK #${s.current_pick} — recs ready</div>`
@@ -230,18 +272,18 @@ function render(s){
  else if(st!=='ready') banner=`<div class="banner idle">pick ${s.live_pick} · catching up…</div>`
  else banner=`<div class="banner idle">pick ${s.current_pick} · you're up at #${num(s.my_next_pick)} (${num(s.picks_until_next)} away)</div>`
  const log=s.strategy?.log||[]
- let h=`<div class=hdr><div>pick <b>${s.current_pick}</b> / ${s.total_picks} · ${s.status}</div><div>Round ${s.round}</div></div>
+ const left=`<div class=hdr><div>pick <b>${s.current_pick}</b> / ${s.total_picks} · ${s.status}</div><div>Round ${s.round}</div></div>
   ${banner}
   <div class=strat><b>${s.strategy?.name||'…'}</b><div class=why>${s.strategy?.blurb||''}</div>
-   ${log.length>1?`<div class=log>${log.map(l=>l.round?`R${l.round}→${l.to} (${l.why})`:`start: ${l.to}`).join(' · ')}</div>`:''}</div>`
- if(s.takeaway) h+=`<div class=take>💡 ${s.takeaway}</div>`
- h+=`<h2>Draft now</h2>${(s.recommendations||[]).map(r=>card(r,false)).join('')}`
- if((s.wait||[]).length) h+=`<h2>Can wait — target later</h2>${s.wait.map(r=>card(r,true)).join('')}`
+   ${log.length>1?`<div class=log>${log.map(l=>l.round?`R${l.round}→${l.to} (${l.why})`:`start: ${l.to}`).join(' · ')}</div>`:''}</div>
+  ${s.takeaway?`<div class=take>💡 ${s.takeaway}</div>`:''}
+  <h2>Draft now</h2>${(s.recommendations||[]).slice(0,5).map(r=>card(r,false)).join('')}`
  const rc=s.my_roster?.players||{}
- h+=`<h2>Your roster (${s.my_roster?.n||0})</h2><div class=roster>`+
-   Object.entries(rc).map(([p,ns])=>`<span>${p}: ${ns.join(', ')}</span>`).join('')+`</div>`
- h+=`<h2>Landscape</h2>${land(s.landscape)}`
- a.innerHTML=h
+ const right=`<h2>Your roster (${s.my_roster?.n||0})</h2><div class=roster>`+
+   Object.entries(rc).map(([p,ns])=>`<span>${p}: ${ns.join(', ')}</span>`).join('')+`</div>`+
+   `<h2>Landscape</h2>${land(s.landscape)}`+
+   ((s.wait||[]).length?`<h2>Can wait — target later</h2>${s.wait.slice(0,4).map(r=>card(r,true)).join('')}`:'')
+ a.innerHTML=`<div id=cols><div id=left>${left}</div><div id=right>${right}</div></div>`
 }
 async function tick(){
  let s
@@ -265,9 +307,12 @@ def main():
     ap.add_argument("--draft", required=True, help="Sleeper draft id (from the draft-room URL)")
     ap.add_argument("--slot", type=int, required=True, help="your draft position (1 = first)")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--ref-drafts", default=None,
+                    help="comma-separated completed Sleeper draft ids — show their empirical "
+                         "ADP next to the crowd ADP (default: league config's ref_draft_ids)")
     args = ap.parse_args()
 
-    state = AppState(args.league, args.draft, args.slot)
+    state = AppState(args.league, args.draft, args.slot, args.ref_drafts)
     threading.Thread(target=state.run_forever, daemon=True).start()
     print(f"draft assistant: http://localhost:{args.port}  "
           f"(league {args.league}, draft {args.draft}, slot {args.slot})")

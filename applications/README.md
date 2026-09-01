@@ -7,7 +7,15 @@ projection or a point value here.
 
 ```
 bin/draft-ui --league sleeper --draft <id> --slot 4     # then open localhost:8000
+bin/draft-ui --league sleeper --draft <id> --slot 4 --ref-drafts <mock_id>,<mock_id>
 ```
+
+The page frame turns amber while the engine is recomputing (a state pill top-right
+says `⟳ thinking…` / `✓ recs ready` / `⚠ stuck`) and lays recommendations + roster
++ landscape side-by-side so nothing needs scrolling on a maximized window.
+`--ref-drafts` adds a `Sleeper <n>` figure to each card (empirical ADP from those
+completed Sleeper drafts), flagged amber when it's ≥15 picks later than the crowd
+ADP — a reach the model/market blend can't see.
 
 A tiny Flask server + one auto-refreshing page (`Cache-Control: no-store`, 1.5 s
 poll). A background thread polls the Sleeper draft; each new pick recomputes the
@@ -28,7 +36,10 @@ input. `choose_initial_strategy` is just a first guess until that first sim runs
 by `tilt × roster-need × positional scarcity × ADP-urgency × dart-penalty × value`,
 with an **elite-value override** (a top-of-tier player who falls to you is
 recommended regardless of tilt) and **structural rules** that aren't tunable: TE /
-QB (1-QB) / K / DEF are 1-and-done, K/DEF only in the last two rounds. A player
+QB (1-QB) / K / DEF are 1-and-done, K/DEF only in the last two rounds. The
+scarcity boost and the "position is running" takeaway apply **only while a
+startable (positive-VBD) player is left** at that position — a run you've already
+missed isn't a reason to chase a below-replacement body. A player
 whose ADP is past your next pick is down-weighted and listed under "can wait" with
 the pick he should last to. A **💡 takeaway** line gives the one-sentence read
 ("RB is running — take X now" / "nothing you need is going now — take value X,
@@ -54,6 +65,7 @@ python -m applications.draft_tool --league yahoo               # static board, o
 | `--no-adp` | model-only board, skip the ADP fetch |
 | `--season` | ADP season (default: the projections' target season) |
 | `--blend W` | VBD = `W·model + (1−W)·ADP-implied` (default 0.7; `1.0` = pure model) |
+| `--ref-drafts id,id,…` | completed Sleeper draft ids — show a **`sleeper_adp`** column (mean pick number across those drafts) next to the FFC crowd ADP, so reaches the blend can't see are visible. Display only, never feeds VBD. Defaults to `ref_draft_ids` in the league config. Also accepted by `draft-ui`. |
 | `--export` | write the full ranked board to `models/output/<league>_board.csv` (the static list) |
 | `--replay --draft <id>` | fast-forward a completed Sleeper draft through the live view (dry-run of the `--watch` path) |
 
@@ -149,5 +161,8 @@ because nothing tells it "I already have a starter there."
 - **VBD baselines are heuristic** (`_BASELINE_MULT` / flex splits in `roster.py`).
   Easy to adjust after a mock draft.
 - ADP format is the closest FFC preset to each league (`half-ppr` / `ppr`), not an
-  exact scoring match.
+  exact scoring match — FFC's standard-scoring / 1-TE crowd drifts from a league
+  with 6-pt pass TDs, yardage bonuses, or extra WR/TE flex slots (TEs and QBs go
+  earlier than FFC there). `--ref-drafts` surfaces the gap; the blend itself is
+  unchanged, so cross-check the `sleeper_adp` column on timing calls.
 - Auction, and the weekly start/sit tool, are later.

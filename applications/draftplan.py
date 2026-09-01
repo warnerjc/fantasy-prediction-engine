@@ -193,7 +193,9 @@ def _landscape(board: DraftBoard, picks: list[dict], spec: RosterSpec,
                my_next: int | None) -> dict:
     pos_by_id = _pos_by_id(board)
     recent = Counter(_pick_pos(p, pos_by_id) for p in picks[-spec.teams:])
-    avail = board.available
+    # only players we have a market read on — a no-ADP name (injured, buried,
+    # or just un-ranked) isn't part of "what's left and when does it go"
+    avail = board.available[board.available["adp"].notna()]
     out = {}
     for pos in ("QB", "RB", "WR", "TE"):
         pv = avail[avail["position"] == pos].sort_values("vbd", ascending=False)
@@ -242,6 +244,11 @@ def recommend(board: DraftBoard, draft_state: dict, my_slot: int, spec: RosterSp
     cand["ft"] = cand["position"].map(
         lambda p: _fit(p, my_counts.get(p, 0), targets, rnd, rounds, one_and_done))
     cand["scar"] = cand["position"].map(lambda p: scar.get(p, 1.0))
+    # a run you've already missed isn't scarcity: once the startable tier at a
+    # position is gone, a below-replacement body there shouldn't get a scarcity
+    # boost that lifts it over real value at another position (the Ollie Gordon
+    # "RB is running, take him now" at -17 VBD case)
+    cand["scar"] = np.where(cand["vbd"] > 0, cand["scar"], 1.0)
     # a player with only an ADP and no projection is a pure dart -- don't lead with
     # one when projected players are on the board
     cand["dart"] = np.where(cand["proj_ppg"].isna() | (cand["source"] == "adp"), 0.55, 1.0)
@@ -265,10 +272,10 @@ def recommend(board: DraftBoard, draft_state: dict, my_slot: int, spec: RosterSp
             elite = by_vbd.iloc[[0]]
             ranked = pd.concat([elite, ranked[ranked["name"] != elite.iloc[0]["name"]]])
     takeaway, lead = _takeaway(ranked, cand, land, my_counts, targets, my_next)
-    # keep the card list consistent with the headline advice
+    # the headline names the pick to make — put that player at the top of the cards
     recs = ranked.head(6)
-    if lead is not None and lead not in set(recs["name"]):
-        recs = pd.concat([cand[cand["name"] == lead], recs]).head(6)
+    if lead is not None and lead in set(cand["name"]):
+        recs = pd.concat([cand[cand["name"] == lead], recs[recs["name"] != lead]]).head(6)
 
     # what waiting buys you: strong strategy-fit players whose ADP says they last
     will_last = cand[cand["adp"] > horizon].copy()
@@ -294,16 +301,21 @@ def _takeaway(ranked, cand, land, my_counts, targets, my_next) -> tuple[str, str
     top = ranked.iloc[0]
     for p in ("RB", "WR", "TE", "QB"):                     # a need that's going now
         short = my_counts.get(p, 0) < targets.get(p, 0) - 0.3
-        if (short and land.get(p, {}).get("running") and land[p]["startable_left"] <= 6
-                and land[p]["best"]):
-            nm = land[p]["best"]["name"]
+        if (short and land.get(p, {}).get("running")
+                and 1 <= land[p]["startable_left"] <= 6):
+            # name a player we can actually recommend (has an ADP, clears replacement)
+            pool = cand[(cand["position"] == p) & (cand["vbd"] > 0)].sort_values("vbd", ascending=False)
+            if pool.empty:
+                continue
+            nm = pool.iloc[0]["name"]
             return f"{p} is running and you still need one — take {nm} now.", nm
-    if my_next and top["adp"] > my_next:                   # nothing you need is going now
+    if my_next and top["adp"] > my_next:                   # the best fit will keep — take value first
         going = cand[cand["adp"] <= my_next].sort_values("vbd", ascending=False)
         if not going.empty:
             g = going.iloc[0]
-            return (f"Nothing you need is going now — take value ({g['name']}, {g['position']}) "
-                    f"and grab {top['position']} at #{my_next}."), g["name"]
+            return (f"Nothing you need is going now — take the best value ({g['name']}, "
+                    f"{g['position']}); {top['name']} ({top['position']}) should keep for "
+                    f"your next pick."), g["name"]
     return f"Best fit on the board: {top['name']} ({top['position']}).", top["name"]
 
 
@@ -331,6 +343,7 @@ def _rec_row(r, cur: int, my_next: int | None) -> dict:
     return {
         "name": r.name, "position": r.position, "team": r.most_recent_team,
         "proj_ppg": _round(r.proj_ppg), "adp": _round(r.adp),
+        "sleeper_adp": _round(getattr(r, "sleeper_adp", None)),
         "tier": None if pd.isna(r.tier) else int(r.tier),
         "timing": timing,
         "why": ", ".join(why) or "best fit available",
@@ -341,6 +354,7 @@ def _wait_row(r, my_next: int | None) -> dict:
     return {
         "name": r.name, "position": r.position, "team": r.most_recent_team,
         "proj_ppg": _round(r.proj_ppg), "adp": _round(r.adp),
+        "sleeper_adp": _round(getattr(r, "sleeper_adp", None)),
         "note": f"ADP {r.adp:.0f} — should last to your #{my_next}" if my_next else f"ADP {r.adp:.0f}",
     }
 

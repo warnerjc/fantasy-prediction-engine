@@ -198,6 +198,7 @@ def build_board(
     sleeper_players: pd.DataFrame | None = None,
     max_adp: int = 180,
     blend: float = 0.7,
+    ref_adp: pd.DataFrame | None = None,
 ) -> DraftBoard:
     proj = pd.read_csv(projections_dir / f"{league}_projections.csv")
     proj = proj[proj["position"].isin(SCORABLE)].copy()
@@ -225,6 +226,15 @@ def build_board(
     proj = _attach_adp(proj, adp)
     extra = _unprojected_from_adp(proj, adp, sleeper_players, max_adp)
     board = pd.concat([proj, extra], ignore_index=True) if not extra.empty else proj
+
+    # a second ADP, from real Sleeper drafts of this league — shown next to the
+    # crowd ADP so the user can see reaches the blend can't (never feeds VBD)
+    if ref_adp is not None and not ref_adp.empty:
+        board["norm_name"] = board["name"].map(normalize_name)
+        key = (ref_adp[["norm_name", "position", "adp"]]
+               .drop_duplicates(["norm_name", "position"])
+               .rename(columns={"adp": "sleeper_adp"}))
+        board = board.merge(key, on=["norm_name", "position"], how="left").drop(columns=["norm_name"])
 
     board["is_rookie"] = board.get("is_rookie", 0)
     board["is_rookie"] = board["is_rookie"].fillna(0).astype(int)

@@ -388,3 +388,118 @@ def test_roster_2026_missing_override_file_is_a_noop(tmp_path, monkeypatch):
     proj = pd.DataFrame({"name": ["X"], "most_recent_team": ["AA"]})
     out = r26.apply_team_labels(proj)
     assert list(out["most_recent_team"]) == ["AA"] and not out["team_changed"].any()
+
+
+# --- scarcity floor (don't chase a need with a below-replacement body) ----
+
+def _board_with_exhausted_rb():
+    """WR has real value left; RB is all below replacement; a K drags the value
+    floor down (so the negative RB still gets a sizeable `val`)."""
+    rows = []
+    for i in range(8):
+        rows.append(dict(player_id=f"wr{i}", sleeper_id=f"s_wr{i}", name=f"WR{i}",
+                         position="WR", most_recent_team="AA", proj_ppg=15 - i,
+                         proj_points=200 - i * 8, vbd=30.0 - i * 4, tier=1 + i // 3,
+                         source="model", adp=float(20 + i * 4)))
+    for i in range(5):
+        rows.append(dict(player_id=f"rb{i}", sleeper_id=f"s_rb{i}", name=f"RB{i}",
+                         position="RB", most_recent_team="BB", proj_ppg=6 - i * 0.3,
+                         proj_points=90 - i * 5, vbd=-10.0 - i * 2, tier=4,
+                         source="model", adp=float(30 + i * 3)))
+    rows.append(dict(player_id="k0", sleeper_id="s_k0", name="K0", position="K",
+                     most_recent_team="CC", proj_ppg=8, proj_points=8, vbd=-45.0,
+                     tier=6, source="model", adp=150.0))
+    df = pd.DataFrame(rows)
+    df["overall_rank"] = df["vbd"].rank(ascending=False, method="first").astype(int)
+    spec = RosterSpec(teams=10, dedicated={"RB": 2, "WR": 2, "K": 1}, flex=[])
+    return DraftBoard(df.sort_values("vbd", ascending=False).reset_index(drop=True), spec, set())
+
+
+def test_recommend_does_not_chase_a_need_below_replacement():
+    from applications.draftplan import STRATEGIES, recommend
+    b = _board_with_exhausted_rb()
+    # a handful of picks in; you hold nothing yet, RB pool is all negative-VBD
+    picks = [{"player_id": f"x{i}", "draft_slot": (i % 10) + 1, "pick_no": i + 1,
+              "metadata": {"position": "WR"}} for i in range(6)]
+    st = {"picks": picks, "status": "drafting", "teams": 10, "rounds": 15}
+    rec = recommend(b, st, my_slot=4, spec=b.spec, strategy=STRATEGIES["bpa"], rounds=15)
+
+    top = rec["recommendations"][0]
+    assert top["position"] == "WR" and top["proj_ppg"] is not None
+    # the headline must not point at a below-replacement RB
+    neg_rbs = {r.name for r in b.players.itertuples() if r.position == "RB" and r.vbd <= 0}
+    assert not any(nm in rec["takeaway"] for nm in neg_rbs)
+
+
+def test_takeaway_never_names_a_player_absent_from_the_card_lists():
+    """A high-VBD player with no ADP (injured / buried / un-ranked) must not be
+    the headline — the takeaway pick has to be something the user can see."""
+    from applications.draftplan import STRATEGIES, recommend
+    b = _sim_board()
+    # blank out ADP for the top few WRs -> they can't be reasoned about on timing
+    top_wr = b.players[b.players["position"] == "WR"].nlargest(3, "vbd")["name"]
+    b.players.loc[b.players["name"].isin(top_wr), "adp"] = np.nan
+    # a WR run so the "running, take X" branch is in play
+    picks = [{"player_id": f"w{i}", "draft_slot": (i % 10) + 1, "pick_no": i + 1,
+              "metadata": {"position": "WR"}} for i in range(9)]
+    st = {"picks": picks, "status": "drafting", "teams": 10, "rounds": 15}
+    rec = recommend(b, st, my_slot=4, spec=b.spec, strategy=STRATEGIES["wr_early"], rounds=15)
+
+    listed = {r["name"] for r in rec["recommendations"]} | {w["name"] for w in rec["wait"]}
+    hit = [nm for nm in b.players["name"] if nm in rec["takeaway"]]
+    assert hit and all(nm in listed for nm in hit)          # every name it drops is visible
+    assert not any(nm in rec["takeaway"] for nm in top_wr)  # not the no-ADP studs
+
+
+# --- Sleeper empirical ADP + dual-ADP board column -----------------------
+
+def test_sleeper_adp_aggregates_pick_numbers(monkeypatch, tmp_path):
+    from applications import adp as adpmod
+    monkeypatch.setattr(adpmod, "CACHE_DIR", tmp_path)
+
+    drafts = {
+        "d1": [{"pick_no": 3, "metadata": {"first_name": "Al", "last_name": "Pierce",
+                                           "position": "WR", "team": "IND"}},
+               {"pick_no": 10, "metadata": {"first_name": "Sam", "last_name": "Laporta",
+                                            "position": "TE", "team": "DET"}}],
+        "d2": [{"pick_no": 7, "metadata": {"first_name": "Al", "last_name": "Pierce",
+                                           "position": "WR", "team": "IND"}}],
+    }
+    monkeypatch.setattr(adpmod.sleeper, "picks", lambda d: drafts[d])
+    out = adpmod.sleeper_adp(["d1", "d2"], ttl_hours=0)
+
+    assert set(out.columns) >= {"name", "norm_name", "position", "team", "adp",
+                                "times_drafted", "stdev"}
+    pierce = out.set_index("norm_name").loc["al pierce"]
+    assert pierce["adp"] == pytest.approx(5.0)          # mean of 3 and 7
+    assert pierce["times_drafted"] == 2
+    assert out.set_index("norm_name").loc["sam laporta", "times_drafted"] == 1
+
+
+def test_build_board_ref_adp_adds_column_without_touching_vbd(tmp_path, monkeypatch):
+    import applications.board as bd
+
+    proj = pd.DataFrame({
+        "player_id": [f"p{i}" for i in range(12)],
+        "name": [f"RB{i}" for i in range(6)] + [f"WR{i}" for i in range(6)],
+        "position": ["RB"] * 6 + ["WR"] * 6,
+        "most_recent_team": ["AA"] * 12,
+        "proj_points": np.linspace(200, 90, 12), "proj_ppg": np.linspace(14, 6, 12),
+        "target_season": 2026,
+    })
+    proj.to_csv(tmp_path / "sleeper_projections.csv", index=False)
+    monkeypatch.setattr(bd, "read_sql", lambda *_a, **_k: pd.DataFrame(
+        {"player_id": proj["player_id"], "sleeper_id": proj["player_id"]}))
+
+    spec = RosterSpec(teams=10, dedicated={"RB": 2, "WR": 2}, flex=[])
+    base = bd.build_board("sleeper", spec, projections_dir=tmp_path, adp=None)
+    ref = pd.DataFrame({"norm_name": ["rb0", "wr0"], "position": ["RB", "WR"], "adp": [5.0, 8.0]})
+    withref = bd.build_board("sleeper", spec, projections_dir=tmp_path, adp=None, ref_adp=ref)
+
+    assert "sleeper_adp" in withref.players.columns
+    m = withref.players.set_index("name")
+    assert m.loc["RB0", "sleeper_adp"] == 5.0 and pd.isna(m.loc["RB1", "sleeper_adp"])
+    # vbd untouched
+    a = base.players.set_index("name")["vbd"]
+    b2 = withref.players.set_index("name")["vbd"]
+    assert (a.sort_index().to_numpy() == pytest.approx(b2.sort_index().to_numpy()))
