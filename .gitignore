@@ -22,3 +22,6 @@ data/cache/
 # Editor / OS
 .DS_Store
 *.swp
+
+# Claude Code — per-user local settings (permissions etc.), never shared
+.claude/settings.local.json
