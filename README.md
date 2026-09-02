@@ -26,8 +26,16 @@ bin/refresh-models --league yahoo
 bin/backtest --league sleeper                   # projected-vs-actual + baselines (~20s)
 bin/backtest --league sleeper --season 2024     # one held-out season
 
+bin/yahoo-auth login --manual                   # one-time Yahoo OAuth (needs .env — see .env.example)
+bin/yahoo-auth whoami                           # check the cached token still works (do this pre-draft)
+bin/yahoo-auth leagues                          # list your Yahoo NFL leagues
+
 bin/test                                         # run the test suite
 ```
+
+Credentials for external APIs (currently just Yahoo) live in a git-ignored `.env`
+at the repo root — `cp .env.example .env` and fill it in. Any script reads them
+via `config.get(...)`.
 
 **Before a real draft:** run `bin/refresh-data --seasons 2015-<current year>`
 then `bin/refresh-models --league sleeper` (and `--league yahoo`) so the

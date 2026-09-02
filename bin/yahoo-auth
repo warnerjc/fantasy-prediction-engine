@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Yahoo Fantasy API client. e.g.  bin/yahoo-auth login  |  bin/yahoo-auth leagues
+cd "$(dirname "$0")/.." || exit 1
+exec .venv/bin/python -m data.yahoo "$@"

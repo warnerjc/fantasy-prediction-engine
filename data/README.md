@@ -30,13 +30,83 @@ Every table has an explicit primary key and is written with `INSERT OR REPLACE`
 | `seasonal_rosters` | `(player_id, season)` | `load_rosters` | Player's team + status + experience for a season. Team is pre-Week-1-known, so `changed_team` features derived from it are not leakage. |
 | `player_ids` | `(gsis_id)` | `load_ff_playerids` | Cross-reference: `gsis_id ↔ pfr_id ↔ sleeper_id ↔ yahoo_id ↔ espn_id`. Use for every cross-source join — never join on name/team. Null-`gsis_id` rows dropped. |
 
+## Yahoo Fantasy API (read-only)
+
+`data/yahoo.py` is a thin OAuth2 client for pulling Yahoo league config directly
+(vs. the hand-captured `specifications/league-configs/yahoo-236625-scoring.json`).
+Credentials load from `.env` at the repo root — copy `.env.example`, create a
+Yahoo OAuth app at <https://developer.yahoo.com/apps/create/> (Redirect URI
+`https://localhost:8000/callback`), and paste in the Client ID / Secret.
+
+**Fantasy API access is approval-gated.** Apply at
+<https://sports.yahoo.com/developer/access/> (read-only — write access is
+discontinued) and wait for Yahoo's approval email; the self-serve "Fantasy
+Sports → Read" permission checkbox no longer exists in the app UI. Until the
+account is approved, every fantasy endpoint returns
+`401 additional_authorization_required`.
+
+```
+bin/yahoo-auth login --manual            # one-time; caches tokens in data/cache/ (git-ignored)
+bin/yahoo-auth whoami                     # prove the token works
+bin/yahoo-auth leagues                    # list your NFL leagues + league_keys
+bin/yahoo-auth settings nfl.l.236625      # dump a league's raw settings JSON
+bin/yahoo-auth raw <fantasy/v2 path>      # ad-hoc endpoint exploration
+```
+
+### Which login flow — always use `--manual` on this machine
+
+`bin/yahoo-auth login` (no flag) runs a local HTTPS listener for the OAuth
+redirect, but on WSL2 the Windows→WSL `localhost` forwarding is flaky and Chrome
+often hides the self-signed-cert "proceed" link, so the redirect dead-ends on
+"this site can't be reached".
+
+**On this WSL2 setup, always run `bin/yahoo-auth login --manual`.** It prints the
+URL; you approve in the browser, get redirected to a page that won't load, then
+copy the **full URL from the address bar** and paste it at the prompt. The command
+pulls the `code` out of it. (If the pasted URL says `error=...` instead of
+`code=...`, it tells you and exits — nothing was authorized.)
+
+### Do I need to log in again on Yahoo draft day?
+
+**Usually no.** `login` is a one-time step: the refresh token is cached in
+`data/cache/yahoo_token.json` and every `bin/yahoo-auth` call auto-refreshes the
+short-lived access token from it. That keeps working for months.
+
+You only need to re-run `bin/yahoo-auth login --manual` if:
+
+- a command prints **`no Yahoo token cached`** (the token file was deleted — e.g.
+  someone cleared `data/cache/`, or the repo was re-cloned), or
+- a command fails refreshing with **`invalid_grant`** / **`stored token has no
+  refresh_token`** (you revoked the app's access in your Yahoo account, or Yahoo
+  expired the grant after long inactivity).
+
+**Draft-day checklist (do this the day before, not 5 minutes before):**
+
+```
+bin/yahoo-auth whoami            # succeeds -> you're set, nothing else to do
+                                 # fails    -> bin/yahoo-auth login --manual, then whoami again
+bin/yahoo-auth leagues           # confirm keepitcrooked's league_key is listed
+```
+
+The Yahoo league drafts offline, so there is no live pick polling to keep a token
+warm during the draft itself — the only thing that touches Yahoo is pulling league
+config beforehand.
+
+### Not wired into scoring yet
+
+The API's `league/settings` shape differs from the hand-captured config
+`scoring.normalize_yahoo` expects — mapping one to the other is the next step. For
+now the CLI just dumps raw JSON.
+
 ## Not landed yet (out of scope for the draft sprint)
 
 - **Red-zone / route-level play-by-play** — for red-zone touches, carries inside
   the 10, aDOT. `nflreadpy.load_pbp` has it; not pulled for v1.
 - **Vegas odds API / weather API** — `schedules` already carries closing
   spread/total and basic weather, enough for v1.
-- **Sleeper / Yahoo league data** — pulled by the application layer at draft time.
+- **Sleeper league data** — pulled by the application layer at draft time.
+- **Yahoo league data** — read-only API client exists (`data/yahoo.py`, see above);
+  not yet mapped into the scoring config.
 
 ## Refresh cadence
 

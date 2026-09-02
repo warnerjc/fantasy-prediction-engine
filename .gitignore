@@ -25,3 +25,6 @@ data/cache/
 
 # Claude Code — per-user local settings (permissions etc.), never shared
 .claude/settings.local.json
+
+# Secrets — real values live here, .env.example is the tracked template
+.env

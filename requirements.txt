@@ -4,7 +4,9 @@
 # data ingestion
 nflreadpy==0.1.5          # maintained nflverse client (serves current season)
 polars==1.44.1            # nflreadpy returns polars; converted to pandas at the boundary
-requests==2.34.2          # Sleeper API, ADP API
+requests==2.34.2          # Sleeper API, ADP API, Yahoo API
+python-dotenv==1.2.3      # config.py — load .env credentials (Yahoo etc.)
+cryptography==46.0.7      # data/yahoo.py — self-signed cert for the local OAuth redirect listener
 
 # core
 pandas==3.0.5

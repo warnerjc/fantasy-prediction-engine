@@ -77,11 +77,12 @@ here before either draft.
       team totals are a weekly-game signal; they don't meaningfully apply to a season-total
       draft ranking. Revisit once the weekly tool (v2) is being built, where it's genuinely
       relevant.
-- [ ] Recreate the **Yahoo Developer app** (Client ID/Secret for OAuth) — **not needed for the
-      sprint either.** Yahoo league `236625` is served via the manually-captured scoring config
-      (`league-configs/yahoo-236625-scoring.json`), no API call required. Only matters if real
-      Yahoo API integration (auto-pull, live polling) is built later, per the original
-      "Yahoo — add later" plan.
+- [~] Recreate the **Yahoo Developer app** (Client ID/Secret for OAuth). Read-only API client
+      now exists (`data/yahoo.py` + `bin/yahoo-auth`, credentials from `.env` — see
+      `.env.example`). **Remaining:** create the app (Fantasy Sports → Read, redirect URI
+      `https://localhost:8000/callback`), run `bin/yahoo-auth login`, then map the API's
+      `league/settings` response into the shape `scoring.normalize_yahoo` expects so it can
+      replace the hand-captured `league-configs/yahoo-236625-scoring.json`.
 - [x] Sleeper API needs no credentials (public, no auth) — nothing to do here, ever.
 
 ## GPU acceleration — explicitly not needed
