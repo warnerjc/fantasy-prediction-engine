@@ -98,3 +98,53 @@ def season_labels(
     out = pd.concat(frames, ignore_index=True)
     out["ppg"] = out["fantasy_points"] / out["games"]
     return out
+
+
+def week_labels(
+    pws: pd.DataFrame,
+    kicking_stats: pd.DataFrame,
+    team_defense_stats: pd.DataFrame,
+    rules: ScoringRules,
+    season_types: tuple[str, ...] = ("REG",),
+) -> pd.DataFrame:
+    """One row per (player_id, season, week, position): ``week_points``.
+
+    The weekly-grain counterpart of ``season_labels`` -- same scoring path
+    (``scoring.score`` via ``_score_rows``), no aggregation to a season and no
+    division by games. For DEF, ``player_id`` is the team abbreviation. Every
+    game is a prediction target (no ``drop_final_week``); the v2 weekly windows
+    do not drop it either.
+    """
+    frames = []
+
+    off = pws[pws["season_type"].isin(season_types)].copy()
+    can = canonical_offense_stats(off)
+    can["fp"] = _score_rows(can, rules, "position")
+    can = can[can["position"].isin(OFFENSE)]
+    frames.append(
+        can.groupby(["player_id", "season", "week", "position"], as_index=False)
+        .agg(week_points=("fp", "sum"))
+    )
+
+    kick = kicking_stats[kicking_stats["game_type"].isin(season_types)].copy()
+    if not kick.empty:
+        ck = canonical_kicking_stats(kick)
+        ck["fp"] = _score_rows(ck, rules, None)
+        g = ck.groupby(["player_id", "season", "week"], as_index=False).agg(
+            week_points=("fp", "sum")
+        )
+        g["position"] = "K"
+        frames.append(g)
+
+    dst = team_defense_stats[team_defense_stats["game_type"].isin(season_types)].copy()
+    if not dst.empty:
+        cd = canonical_dst_stats(dst)
+        cd["fp"] = _score_rows(cd, rules, None)
+        g = cd.groupby(["team", "season", "week"], as_index=False).agg(
+            week_points=("fp", "sum")
+        )
+        g = g.rename(columns={"team": "player_id"})
+        g["position"] = "DEF"
+        frames.append(g)
+
+    return pd.concat(frames, ignore_index=True)

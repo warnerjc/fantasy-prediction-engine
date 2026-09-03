@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 # Projected-vs-actual backtest + naive/market baselines. e.g.  bin/backtest --league sleeper
+#   --grain week   v2 start/sit: weekly model vs rolling-average baselines
 cd "$(dirname "$0")/.." || exit 1
 exec .venv/bin/python -m models.backtest "$@"

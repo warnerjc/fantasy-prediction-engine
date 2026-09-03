@@ -10,12 +10,17 @@ strictly-earlier weeks. Pre-game-known context (opponent, home/away, rest, Vegas
 line, reported injury status) is allowed for the as-of week itself.
 """
 
-from .build import season_feature_matrix, training_frame
+from .build import season_feature_matrix, training_frame, week_feature_matrix
 from .context import context_features
 from .identity import identity_features
 from .opponent import opponent_allowed_features
 from .opportunity import opportunity_features, snap_features
-from .special import defense_feature_matrix, kicker_feature_matrix
+from .special import (
+    defense_feature_matrix,
+    kicker_feature_matrix,
+    week_defense_matrix,
+    week_kicker_matrix,
+)
 from .team_change import team_change_features
 from .window import AsOf, Window, visible_weeks, week_index
 
@@ -31,7 +36,10 @@ __all__ = [
     "identity_features",
     "season_feature_matrix",
     "training_frame",
+    "week_feature_matrix",
     "kicker_feature_matrix",
     "defense_feature_matrix",
+    "week_kicker_matrix",
+    "week_defense_matrix",
     "team_change_features",
 ]

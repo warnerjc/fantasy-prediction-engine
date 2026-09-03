@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from scoring import ScoringRules, stat_keys as K
-from models import ModelConfig, season_labels
+from models import ModelConfig, WEEKLY_CONFIGS, season_labels, week_labels
 from models.config import NON_FEATURE_COLS
 from models.pipeline import assemble_position, feature_columns, train_one, walk_forward
 from models.prediction import Prediction, predictions_frame
@@ -51,6 +51,23 @@ def test_season_labels_drop_final_week_excludes_each_seasons_last_week():
     lab = season_labels(pws, empty_k, empty_d, rules, drop_final_week=True).set_index("player_id")
     assert lab.loc["wr1", "games"] == 2                          # wk18 dropped
     assert lab.loc["wr1", "ppg"] == pytest.approx(15.0)          # not inflated by wk18
+
+
+# --- weekly labels (v2) --------------------------------------------------
+
+def test_week_labels_are_week_grain_with_same_scoring_as_season():
+    pws = pd.DataFrame([
+        _pw("wr1", "WR", "AA", 2023, 1, receptions=5, receiving_yards=100, receiving_tds=1),
+        _pw("wr1", "WR", "AA", 2023, 2, receptions=5, receiving_yards=50),
+    ])
+    rules = ScoringRules(per_unit={K.REC: 1.0, K.REC_YD: 0.1, K.REC_TD: 6.0})
+    empty_k = pd.DataFrame(columns=["kicker_player_id", "season", "week", "game_type"])
+    empty_d = pd.DataFrame(columns=["defense_team", "season", "week", "game_type"])
+
+    wl = week_labels(pws, empty_k, empty_d, rules).set_index("week")
+    assert set(wl.columns) >= {"player_id", "season", "position", "week_points"}
+    assert wl.loc[1, "week_points"] == pytest.approx(21.0)   # 5 + 10 + 6
+    assert wl.loc[2, "week_points"] == pytest.approx(10.0)   # 5 + 5
 
 
 # --- prediction shape -----------------------------------------------------
@@ -129,6 +146,57 @@ def test_walk_forward_trains_only_on_earlier_seasons():
     # signal recoverable on synthetic data where ppg is ~linear in usage
     assert metrics["spearman"].mean() > 0.5
     assert set(oof["target_season"]) == {2019, 2020, 2021}
+
+
+def _weekly_assembled(n_seasons=6, players=40, weeks=17, seed=1):
+    rng = np.random.default_rng(seed)
+    feat_rows, lab_rows = [], []
+    for s in range(2016, 2016 + n_seasons):
+        for i in range(players):
+            skill = rng.uniform(3, 12)
+            for wk in range(1, weeks + 1):
+                usage = max(0.0, skill + rng.normal(0, 2))
+                feat_rows.append(dict(player_id=f"p{i}", target_season=s, week=wk,
+                                      position="WR", most_recent_pos="WR",
+                                      prior_games=8, targets_pg=usage,
+                                      rec_yd_pg=usage * 8))
+                pts = max(0.0, usage * 1.1 + rng.normal(0, 3))
+                lab_rows.append(dict(player_id=f"p{i}", season=s, week=wk,
+                                     position="WR", week_points=pts))
+    feats = pd.DataFrame(feat_rows)
+    labels = pd.DataFrame(lab_rows)
+    return assemble_position(feats, labels, "WR", grain="week")
+
+
+def test_assemble_position_week_grain_joins_on_player_week():
+    a = _weekly_assembled(n_seasons=2, players=3, weeks=4)
+    assert {"week", "week_points", "label_week_played", "target_season"}.issubset(a.columns)
+    assert a["label_week_played"].all()                       # every synthetic week played
+    assert len(a) == 2 * 3 * 4
+
+
+def test_walk_forward_weekly_trains_on_earlier_seasons_and_reports_coverage():
+    a = _weekly_assembled()
+    cfg = WEEKLY_CONFIGS["WR"].with_(n_estimators=40, min_feature_games=0)
+    metrics, oof = walk_forward(a, cfg, eval_seasons=[2019, 2020, 2021])
+    assert list(metrics["season"]) == [2019, 2020, 2021]
+    assert (metrics["n"] > 0).all()
+    assert metrics["spearman"].mean() > 0.4                   # signal ~linear in usage
+    assert metrics["coverage_80"].notna().all()               # quantiles populated
+    assert {"week", "pred_p90"}.issubset(oof.columns)
+
+
+def test_weekly_config_is_a_pure_config_change():
+    """The v2 weekly model differs from v1 only in ModelConfig — target, grain,
+    quantiles — never in train_one's body (AGENTS.md invariant)."""
+    wr = WEEKLY_CONFIGS["WR"]
+    assert wr.target == "week_points" and wr.grain == "week"
+    assert wr.quantiles == (0.1, 0.5, 0.9)
+    a = _weekly_assembled(n_seasons=2, players=8, weeks=6)
+    model = train_one(a, wr.with_(n_estimators=30, min_feature_games=0))
+    assert set(model.quantile_models) == {0.1, 0.5, 0.9}
+    preds = model.predict(a)
+    assert (preds["pred_p10"] <= preds["pred_p90"]).mean() > 0.9
 
 
 def test_min_label_games_filters_training_rows_not_inference():

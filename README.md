@@ -22,9 +22,11 @@ bin/mock   --league sleeper --slot 5 --sims 200 # Monte Carlo: 200 simulated dra
 bin/refresh-data   --seasons 2015-2026          # re-pull nflverse into SQLite (~30s)
 bin/refresh-models --league sleeper             # retrain + rewrite projections
 bin/refresh-models --league yahoo
+bin/refresh-models --league sleeper --grain week # v2 start/sit: weekly walk-forward (~2min)
 
 bin/backtest --league sleeper                   # projected-vs-actual + baselines (~20s)
 bin/backtest --league sleeper --season 2024     # one held-out season
+bin/backtest --league sleeper --grain week      # weekly model vs rolling averages (~5min)
 
 bin/yahoo-auth login --manual                   # one-time Yahoo OAuth (needs .env — see .env.example)
 bin/yahoo-auth whoami                           # check the cached token still works (do this pre-draft)
@@ -45,6 +47,8 @@ Outputs land in `models/output/`:
 - `<league>_projections.csv` — raw model projections (PPG)
 - `<league>_board.csv` — full ranked draft board with value-over-replacement (from `--export`)
 - `<league>_walkforward.csv` — model accuracy by held-out season
+- `<league>_weekly_walkforward.csv` — v2 weekly model accuracy + p10–p90 coverage by held-out season
+- `<league>_weekly_baselines_<tag>.csv` — v2 weekly model vs rolling-average baselines
 
 ### If a wrapper script won't run
 

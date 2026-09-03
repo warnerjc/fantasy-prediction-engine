@@ -19,18 +19,30 @@ from .prediction import predictions_frame
 
 
 def assemble_position(
-    feature_matrix: pd.DataFrame, labels: pd.DataFrame, position: str
+    feature_matrix: pd.DataFrame, labels: pd.DataFrame, position: str,
+    grain: str = "season",
 ) -> pd.DataFrame:
-    """Join per-target-season feature rows to their label (label season == the
-    season being predicted). One row per (player_id, target_season)."""
+    """Join feature rows to their label.
+
+    ``grain="season"`` (v1): label season == the season predicted, one row per
+    (player_id, target_season). ``grain="week"`` (v2): ``week_labels`` joined on
+    (player_id, target_season, week), one row per player-week, with a
+    ``label_week_played`` flag.
+    """
     feats = feature_matrix.copy()
-    lab = labels[labels["position"] == position][
-        ["player_id", "season", "games", "fantasy_points", "ppg"]
-    ].rename(columns={
-        "season": "target_season", "games": "label_games",
-        "fantasy_points": "label_points",
-    })
-    merged = feats.merge(lab, on=["player_id", "target_season"], how="left")
+    pos_lab = labels[labels["position"] == position]
+
+    if grain == "week":
+        lab = pos_lab[["player_id", "season", "week", "week_points"]].rename(
+            columns={"season": "target_season"})
+        merged = feats.merge(lab, on=["player_id", "target_season", "week"], how="left")
+        merged["label_week_played"] = merged["week_points"].notna()
+    else:
+        lab = pos_lab[["player_id", "season", "games", "fantasy_points", "ppg"]].rename(
+            columns={"season": "target_season", "games": "label_games",
+                     "fantasy_points": "label_points"})
+        merged = feats.merge(lab, on=["player_id", "target_season"], how="left")
+
     merged["position"] = position
     if "games" in merged.columns:
         merged = merged.rename(columns={"games": "prior_games"})
@@ -84,7 +96,10 @@ class FittedModel:
 
 
 def _training_mask(frame: pd.DataFrame, config: ModelConfig) -> pd.Series:
-    m = frame["label_points"].notna() & (frame["label_games"] >= config.min_label_games)
+    if config.grain == "week":
+        m = frame[config.target].notna()          # the player-week was actually played
+    else:
+        m = frame["label_points"].notna() & (frame["label_games"] >= config.min_label_games)
     if "prior_games" in frame.columns:
         m &= frame["prior_games"] >= config.min_feature_games
     return m
@@ -124,6 +139,42 @@ def _metrics(pred: pd.Series, actual: pd.Series, top_n: int) -> dict:
 _TOP_N = {"QB": 12, "RB": 24, "WR": 24, "TE": 12, "K": 12, "DEF": 12}
 
 
+def _pinball(y: pd.Series, q: pd.Series, alpha: float) -> float:
+    d = y - q
+    return float(np.where(d >= 0, alpha * d, (alpha - 1.0) * d).mean())
+
+
+def _weekly_metrics(test: pd.DataFrame, target: str, top_n: int) -> dict:
+    """Player-week grain: rank ρ / MAE pooled over all player-weeks, top-N hit
+    averaged per week, and (when quantiles are populated) empirical p10–p90
+    coverage + p50 pinball loss."""
+    ok = test["pred_mean"].notna() & test[target].notna()
+    t = test[ok]
+    base = {"n": len(t), "spearman": np.nan, "mae": np.nan, f"top{top_n}_hit": np.nan,
+            "coverage_80": np.nan, "pinball_p50": np.nan}
+    if len(t) < 10:
+        return base
+    base["spearman"] = spearmanr(t["pred_mean"], t[target]).statistic
+    base["mae"] = float((t["pred_mean"] - t[target]).abs().mean())
+
+    hits = []
+    for _, g in t.groupby("week"):
+        if len(g) < top_n:
+            continue
+        tp = set(g.sort_values("pred_mean", ascending=False).head(top_n).index)
+        ta = set(g.sort_values(target, ascending=False).head(top_n).index)
+        hits.append(len(tp & ta) / top_n)
+    base[f"top{top_n}_hit"] = float(np.mean(hits)) if hits else np.nan
+
+    if "pred_p10" in t.columns and t["pred_p10"].notna().any():
+        q = t.dropna(subset=["pred_p10", "pred_p50", "pred_p90"])
+        if len(q) >= 10:
+            inside = (q[target] >= q["pred_p10"]) & (q[target] <= q["pred_p90"])
+            base["coverage_80"] = float(inside.mean())
+            base["pinball_p50"] = _pinball(q[target], q["pred_p50"], 0.5)
+    return base
+
+
 def walk_forward(
     assembled: pd.DataFrame, config: ModelConfig, eval_seasons: list[int]
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -141,12 +192,18 @@ def walk_forward(
         model = train_one(train, config)
         pred = model.predict(test)
         test = pd.concat([test, pred], axis=1)
-        m = _metrics(test.set_index("player_id")["pred_mean"],
-                     test.set_index("player_id")[config.target], top_n)
-        m = {"position": config.position, "season": s, **m}
-        rows.append(m)
-        oof.append(test[["player_id", "target_season", "position", config.target,
-                         "label_points", "label_games", "pred_mean"]])
+
+        if config.grain == "week":
+            m = _weekly_metrics(test, config.target, top_n)
+            oof_cols = ["player_id", "target_season", "week", "position", config.target,
+                        "pred_mean", "pred_p10", "pred_p50", "pred_p90"]
+        else:
+            m = _metrics(test.set_index("player_id")["pred_mean"],
+                         test.set_index("player_id")[config.target], top_n)
+            oof_cols = ["player_id", "target_season", "position", config.target,
+                        "label_points", "label_games", "pred_mean"]
+        rows.append({"position": config.position, "season": s, **m})
+        oof.append(test[[c for c in oof_cols if c in test.columns]])
     metrics = pd.DataFrame(rows)
     oof_df = pd.concat(oof, ignore_index=True) if oof else pd.DataFrame()
     return metrics, oof_df

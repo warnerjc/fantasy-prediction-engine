@@ -34,10 +34,11 @@ build flag, not a separate codebase.
 
 `ModelConfig` holds everything the training loop varies: `target` column,
 `objective` (`tweedie` for non-negative offense/K, `regression` for DEF whose PPG
-can go negative), tree params, the training-row filters, and `quantiles`
-(empty in v1). The invariant test: **v2's weekly quantile model is a new
-`ModelConfig` (`target="week_points"`, `quantiles=(.1,.5,.9)`, weekly split), not
-an edit to `pipeline.train_one`.**
+can go negative), `grain` (`"season"` v1 / `"week"` v2), `feature_window_games`
+(the trailing window for weekly), tree params, the training-row filters, and
+`quantiles` (empty in v1). The invariant held: **v2's weekly quantile model is
+`WEEKLY_CONFIGS` — `target="week_points"`, `grain="week"`, `quantiles=(.1,.5,.9)`
+— not an edit to `pipeline.train_one`.**
 
 `min_feature_games` / `min_label_games` filter *training* rows (a prior season
 with 2 games carries no signal; a target season with 2 games is a noisy label) —
@@ -70,6 +71,63 @@ Gain-importance sanity check (leakage guard): WR led by `rec_yd_pg` then
 `target_share` / `receptions_pg` / snap %; RB led by `off_snap_pct_mean` then
 `rush_yd_pg` / `carries`. Opportunity dominates efficiency — the leakage
 discipline in `/features` held.
+
+## v2 weekly model (`--grain week`)
+
+`bin/refresh-models --league <l> --grain week` runs the weekly walk-forward for
+all six positions and writes `<league>_weekly_walkforward.csv`. It's a **new
+config, not a new training path**: `WEEKLY_CONFIGS` sets `target="week_points"`,
+`grain="week"`, `feature_window_games` (6 skill / 8 K-DEF), `quantiles=(.1,.5,.9)`;
+`pipeline.train_one` is unchanged. Features come from
+`features.week_feature_matrix` (trailing per-player window + per-game Vegas /
+opponent / venue context); labels from `models.week_labels` (same `scoring.score`
+path as `season_labels`, at week grain). Split is still walk-forward by season —
+train on all weeks of `target_season < S`, score every player-week of `S`.
+
+Metrics are player-week grain: rank ρ / MAE pooled over player-weeks, top-N hit
+averaged per week, and — from the real quantile models — empirical p10–p90
+**coverage** and p50 **pinball loss**.
+
+Walk-forward 2019–25, both leagues (sleeper / yahoo):
+
+| pos | model ρ | MAE | topN | p10–p90 cover |
+|---|---|---|---|---|
+| QB  | 0.49 / 0.50 | 8.7 / 8.3 | 0.52 | 0.62 |
+| RB  | 0.67 / 0.66 | 5.1 / 4.3 | 0.60 | 0.70 |
+| WR  | 0.62 / 0.61 | 4.5 / 3.8 | 0.44 | 0.69 |
+| TE  | 0.54 / 0.52 | 3.3 / 2.9 | 0.45 | 0.66 |
+| K   | 0.10 / 0.10 | 3.9 / 4.4 | 0.44 | 0.73 |
+| DEF | 0.30 / 0.29 | 5.9 / 4.4 | 0.52 | 0.75 |
+
+## Weekly backtest — model vs rolling averages (`backtest.py --grain week`)
+
+`bin/backtest --league <l> --grain week [--season …]`. Same walk-forward split,
+graded against four cheap in-season baselines (each strictly from the player's
+earlier games):
+
+- **`trailing_mean`** — mean of the last N games (crosses the season boundary)
+- **`trailing_ewma`** — span-N EWMA of prior games
+- **`season_to_date`** — mean of this season's earlier weeks
+- **`last_game`** — the previous game's points
+
+Writes `<league>_weekly_baselines_<tag>.csv` and `<league>_weekly_backtest_<tag>.csv`
+(per player-week, biggest model misses first).
+
+**Verdict (2019–25, both leagues): ship it.** Unlike the season model — a wash
+with `ewma_ppg` — the weekly model **beats `trailing_ewma` on rank ρ at every
+position**: QB +0.02–0.03, WR +0.013, TE +0.012–0.018, K +0.03, and **DEF
++0.15** (0.30 vs 0.14 — the per-game context roughly doubles DEF rank
+correlation, reversing the season-grain finding that the DEF model *lost* to
+ewma). MAE is lower everywhere. **RB is the one wash** (0.665 vs 0.662), same as
+season grain — last week's box score already carries the RB signal. `last_game`
+alone is clearly the worst baseline — weekly variance is real, and a trailing
+window matters.
+
+**Open: quantile calibration.** p10–p90 coverage lands 0.62–0.75 vs the 0.80
+nominal — the LightGBM quantile models run too narrow (worst at QB). Before the
+intervals drive a start/sit confidence call they need widening (fit .05/.95 and
+relabel, or a post-hoc conformal adjustment on a held-out slice). The mean
+projection is trustworthy now; the spread is not yet.
 
 ## Backtest + baselines (`backtest.py`)
 

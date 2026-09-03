@@ -45,6 +45,16 @@ week itself — that's what `context_features` uses.
 - `training_frame(…, target_seasons)` — `season_feature_matrix` stacked over
   several seasons = the X matrix for walk-forward training; the model splits on
   `target_season`.
+- `week_feature_matrix(pws, snap_counts, player_ids, team_week, target_season, window=None)` —
+  the **v2 start/sit entry point**. One row per player-week actually played in
+  `target_season` (REG), keyed `(player_id, target_season, week)`. Each row is
+  `AsOf(target_season, week)` + `Window.trailing(n_games=N, max_seasons_back=2)`
+  (the player's last N games, crossing the season boundary but not stale), and —
+  unlike the season matrix — folds in the per-game context: `context_features`
+  (Vegas implied total / spread, venue, rest) on the player's team and
+  `opponent_allowed_features` (`def_<POS>_*`) on the player's Week-N opponent.
+  `week_kicker_matrix` / `week_defense_matrix` in `special.py` are the K / DEF
+  counterparts.
 
 Pass `seasonal_rosters` + `team_week` to `season_feature_matrix` to add
 team-change features (a walk-forward A/B showed they help RB/WR: WR ρ 0.69→0.70,
@@ -55,8 +65,7 @@ there aren't enough historical "veteran RB → better situation" examples to lea
 the pattern. Open problem.
 
 `context_features` / `opponent_allowed_features` are **not** folded into
-`season_feature_matrix` — they're per-game and belong to the v2 weekly matrix.
-They're built and as-of-parameterized now so v2 is a call-site change, not new code.
+`season_feature_matrix` — they're per-game. `week_feature_matrix` folds them in.
 
 ## Not here yet
 
@@ -65,3 +74,7 @@ They're built and as-of-parameterized now so v2 is a call-site change, not new c
 - **Strength-of-schedule for the season projection** — could average
   `opponent_allowed` over a team's S-1 slate; not built for the sprint.
 - **Injury-report features** (`starter_confidence`, etc.) — v2 adjustment layer.
+- **Defense-side trailing window for `opponent_allowed`** — the weekly matrix
+  currently groups each player's own trailing games by the defense faced (coarse
+  proxy). A proper "what this D allowed over *its* last N games" window is a fast
+  follow if the weekly backtest rewards the context block.

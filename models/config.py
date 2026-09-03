@@ -11,9 +11,12 @@ from dataclasses import dataclass, field, replace
 
 # columns that are identifiers / metadata, never model inputs
 NON_FEATURE_COLS = frozenset({
-    "player_id", "target_season", "season", "position", "team",
+    "player_id", "target_season", "season", "week", "position", "team",
+    "opponent", "defense_team",
     "most_recent_team", "most_recent_pos", "gsis_id",
     "fantasy_points", "ppg", "games", "label_games", "label_points",
+    # weekly grain (v2)
+    "week_points", "label_week_played",
 })
 
 
@@ -21,6 +24,10 @@ NON_FEATURE_COLS = frozenset({
 class ModelConfig:
     position: str
     target: str = "ppg"                 # column in the assembled frame to predict
+    grain: str = "season"               # "season" (v1 draft) | "week" (v2 start/sit)
+    # trailing games each player's window looks back (grain="week" only); None ->
+    # the season-grain full-prior-season window
+    feature_window_games: int | None = None
     objective: str = "tweedie"          # LightGBM objective
     tweedie_variance_power: float = 1.3
     learning_rate: float = 0.03
@@ -60,4 +67,37 @@ DEFAULT_CONFIGS: dict[str, ModelConfig] = {
     # DEF PPG goes negative in some leagues (points-allowed penalties) -> L2, not tweedie
     "DEF": ModelConfig("DEF", objective="regression", num_leaves=15, n_estimators=300,
                        min_child_samples=15, min_feature_games=6, min_label_games=6),
+}
+
+
+# --- v2 weekly quantile models ------------------------------------------------
+# A new config, not a new training path (AGENTS.md invariant): same
+# ``pipeline.train_one`` reads ``target="week_points"``, ``grain="week"``, a
+# trailing feature window, and real ``quantiles``. Weekly fantasy points are more
+# zero-inflated / right-skewed than a season PPG average, so the Tweedie variance
+# power runs a touch higher. Sample weighting by games is season-grain only.
+_WEEKLY_QUANTILES = (0.1, 0.5, 0.9)
+
+
+def _weekly(pos: str, **kw) -> ModelConfig:
+    base = DEFAULT_CONFIGS[pos]
+    return base.with_(
+        target="week_points",
+        grain="week",
+        feature_window_games=kw.pop("feature_window_games", 6),
+        quantiles=_WEEKLY_QUANTILES,
+        sample_weight_by_label_games=False,
+        min_feature_games=kw.pop("min_feature_games", 3),
+        **kw,
+    )
+
+
+WEEKLY_CONFIGS: dict[str, ModelConfig] = {
+    "QB": _weekly("QB", tweedie_variance_power=1.5),
+    "RB": _weekly("RB", tweedie_variance_power=1.5),
+    "WR": _weekly("WR", tweedie_variance_power=1.5),
+    "TE": _weekly("TE", tweedie_variance_power=1.5),
+    "K": _weekly("K", feature_window_games=8, min_feature_games=4),
+    # weekly DEF points go negative -> regression (train_one also guards y<0)
+    "DEF": _weekly("DEF", feature_window_games=8, min_feature_games=4),
 }

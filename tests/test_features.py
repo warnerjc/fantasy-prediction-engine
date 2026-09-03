@@ -15,7 +15,9 @@ from features import (
     opportunity_features,
     season_feature_matrix,
     visible_weeks,
+    week_feature_matrix,
     week_index,
+    week_kicker_matrix,
 )
 
 
@@ -84,6 +86,16 @@ def test_trailing_window_takes_last_n_games_played(pws):
     wr1 = vis[vis["player_id"] == "wr1"]
     assert list(wr1["week"]) == [2, 3]            # strictly before wk4, last 2
     assert wr1["week_index"].max() < AsOf(2023, 4).index
+
+
+def test_trailing_max_seasons_back_drops_stale_games():
+    rows = [_pws_row("old", "WR", "AAA", 2019, wk) for wk in (1, 2)]      # ancient
+    rows += [_pws_row("old", "WR", "AAA", 2022, wk) for wk in (16, 17)]   # recent
+    df = pd.DataFrame(rows)
+    capped = visible_weeks(df, AsOf(2023, 1), Window.trailing(10, max_seasons_back=2))
+    assert set(capped["season"]) == {2022}           # 2019 games excluded (>2 back)
+    uncapped = visible_weeks(df, AsOf(2023, 1), Window.trailing(10))
+    assert set(uncapped["season"]) == {2019, 2022}
 
 
 # --- opportunity ------------------------------------------------------------
@@ -204,6 +216,77 @@ def test_kicker_and_defense_matrices_are_prior_season_only():
     dm = defense_feature_matrix(d, tw, 2024).set_index("player_id")
     assert dm.loc["GB", "dst_sack_pg_prior"] == pytest.approx(3.0)
     assert dm.loc["GB", "takeaways_pg_prior"] == pytest.approx(2.0)
+
+
+def _tw_row(team, season, week, opp="OPP", **kw):
+    base = dict(season=season, week=week, game_type="REG", team=team, opponent=opp,
+                is_home=1, rest=7, div_game=0, implied_total=23.0, team_spread=-2.0,
+                roof="outdoors", temp=60, wind=6)
+    base.update(kw)
+    return base
+
+
+def test_week_feature_matrix_is_keyed_leak_free_and_has_context():
+    rows = []
+    # wr1: trailing history in 2022, then 2023 wks 1-3 are the prediction targets.
+    for wk in (15, 16, 17, 18):
+        rows.append(_pws_row("wr1", "WR", "AAA", 2022, wk, targets=8, receptions=5,
+                             receiving_yards=60, receiving_air_yards=90))
+    for wk in (1, 2, 3):
+        rows.append(_pws_row("wr1", "WR", "AAA", 2023, wk, opp="BBB", targets=9,
+                             receptions=6, receiving_yards=80, receiving_air_yards=100))
+    # a blow-up in 2023 wk2 that must NOT leak into the wk2 (or earlier) feature row
+    rows.append(_pws_row("wr1", "WR", "AAA", 2023, 2, opp="BBB", targets=99,
+                          receiving_yards=999))
+    # teammate so target shares are well-defined
+    for wk in (15, 16, 17, 18):
+        rows.append(_pws_row("wr2", "WR", "AAA", 2022, wk, targets=8, receptions=4,
+                             receiving_yards=40, receiving_air_yards=60))
+    for wk in (1, 2, 3):
+        rows.append(_pws_row("wr2", "WR", "AAA", 2023, wk, opp="BBB", targets=9))
+    pws = pd.DataFrame(rows)
+
+    tw = pd.DataFrame([_tw_row("AAA", 2023, wk, opp="BBB") for wk in (1, 2, 3)]
+                      + [_tw_row("BBB", 2023, wk, opp="AAA", is_home=0) for wk in (1, 2, 3)])
+    snaps = pd.DataFrame(columns=["gsis_id", "season", "week", "game_type",
+                                  "offense_pct", "offense_snaps", "st_pct"])
+    pids = pd.DataFrame([dict(gsis_id="wr1", birthdate="1998-01-01", draft_year=2020,
+                              draft_round=1, draft_ovr=12),
+                         dict(gsis_id="wr2", birthdate="1997-01-01", draft_year=2019,
+                              draft_round=3, draft_ovr=70)])
+
+    fm = week_feature_matrix(pws, snaps, pids, tw, 2023,
+                             Window.trailing(n_games=6, max_seasons_back=2))
+
+    # keyed one row per player-week actually played in 2023
+    assert {"player_id", "target_season", "week"}.issubset(fm.columns)
+    assert (fm["target_season"] == 2023).all()
+    assert sorted(fm[fm["player_id"] == "wr1"]["week"]) == [1, 2, 3]
+
+    wk2 = fm[(fm["player_id"] == "wr1") & (fm["week"] == 2)].iloc[0]
+    # as-of wk2 sees 2022 wks 15-18 + 2023 wk1 only: 5 games, targets_pg well under 20
+    assert wk2["games"] == 5
+    assert wk2["targets_pg"] < 20            # the 99-target wk2 blow-up did not leak
+    # per-game context for the as-of matchup is attached
+    assert wk2["implied_total"] == pytest.approx(23.0)
+    assert "def_WR_rec_yd_pg" in fm.columns
+
+
+def test_week_kicker_matrix_is_week_grain_and_trailing():
+    kick = pd.DataFrame(
+        [dict(kicker_player_id="k1", season=2022, week=wk, game_type="REG", team="GB",
+              fg_made=2, fg_missed=0, fg_made_50p=1, fg_made_yds=80, xp_made=3, xp_missed=0)
+         for wk in range(12, 19)]
+        + [dict(kicker_player_id="k1", season=2023, week=wk, game_type="REG", team="GB",
+                fg_made=1, fg_missed=1, fg_made_50p=0, fg_made_yds=35, xp_made=2, xp_missed=0)
+           for wk in (1, 2)]
+    )
+    tw = pd.DataFrame([_tw_row("GB", 2023, wk) for wk in (1, 2)])
+    km = week_kicker_matrix(kick, tw, 2023, Window.trailing(n_games=6, max_seasons_back=2))
+    assert sorted(km["week"]) == [1, 2]
+    wk2 = km[km["week"] == 2].iloc[0]
+    assert wk2["games"] == 6                 # 2022 wks 13-18 + 2023 wk1, capped at 6
+    assert wk2["implied_total"] == pytest.approx(23.0)
 
 
 def test_season_feature_matrix_is_keyed_and_leak_free(pws):

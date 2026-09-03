@@ -29,17 +29,25 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 
 # the ADP baseline reuses the app layer's cached FFC client rather than
 # re-implementing the HTTP + on-disk cache. backtest.py is a diagnostic, not part
 # of the train/project path, so this one-way dependency is acceptable.
 from applications.adp import fetch_adp, normalize_name
 
-from .build import OFFENSE, _feature_matrix, _load_tables
-from .config import DEFAULT_CONFIGS
-from .labels import season_labels
+from .build import (
+    OFFENSE,
+    _feature_matrix,
+    _load_tables,
+    _weekly_offense_matrix,
+    _weekly_special_matrix,
+)
+from .config import DEFAULT_CONFIGS, WEEKLY_CONFIGS
+from .labels import season_labels, week_labels
 from .leagues import load_rules
-from .pipeline import _metrics, assemble_position, walk_forward
+from .pipeline import _metrics, _weekly_metrics, assemble_position, walk_forward
+from features.window import Window
 
 OUT_DIR = Path(__file__).resolve().parent / "output"
 
@@ -240,6 +248,166 @@ def _print_summary(metrics: pd.DataFrame) -> None:
         print()
 
 
+# --- weekly grain (v2) -------------------------------------------------------
+
+_WEEKLY_TOP_N = {"QB": 12, "RB": 24, "WR": 24, "TE": 12, "K": 12, "DEF": 12}
+
+
+def _weekly_rolling_baselines(pts: pd.DataFrame, n: int) -> pd.DataFrame:
+    """Per (player_id, season, week) points frame -> the same frame plus four
+    baseline columns, each computed strictly from the player's earlier games:
+
+      trailing_mean   mean of the last ``n`` games (crosses the season boundary)
+      trailing_ewma   span-``n`` EWMA of prior games
+      season_to_date  mean of this season's earlier weeks
+      last_game       the previous game's points
+    """
+    p = pts.sort_values(["player_id", "season", "week"]).copy()
+    g = p.groupby("player_id")["week_points"]
+    p["trailing_mean"] = g.transform(lambda s: s.shift().rolling(n, min_periods=1).mean())
+    p["trailing_ewma"] = g.transform(lambda s: s.shift().ewm(span=n, min_periods=1).mean())
+    p["last_game"] = g.transform(lambda s: s.shift())
+    p["season_to_date"] = (p.groupby(["player_id", "season"])["week_points"]
+                           .transform(lambda s: s.shift().expanding().mean()))
+    return p
+
+
+def _weekly_grade(name: str, df: pd.DataFrame, pred_col: str, top_n: int,
+                  season: int, position: str) -> dict:
+    """Pooled player-week rank ρ / MAE + per-week top-N hit for one method."""
+    ok = df[pred_col].notna() & df["week_points"].notna()
+    t = df[ok]
+    row = {"season": season, "position": position, "method": name, "n": len(t),
+           "spearman": np.nan, "mae": np.nan, "topN_hit": np.nan}
+    if len(t) < 10:
+        return row
+    row["spearman"] = spearmanr(t[pred_col], t["week_points"]).statistic
+    row["mae"] = float((t[pred_col] - t["week_points"]).abs().mean())
+    hits = []
+    for _, wk in t.groupby("week"):
+        if len(wk) < top_n:
+            continue
+        tp = set(wk.sort_values(pred_col, ascending=False).head(top_n).index)
+        ta = set(wk.sort_values("week_points", ascending=False).head(top_n).index)
+        hits.append(len(tp & ta) / top_n)
+    row["topN_hit"] = float(np.mean(hits)) if hits else np.nan
+    return row
+
+
+def run_weekly(league: str, seasons: list[int] | None) -> None:
+    OUT_DIR.mkdir(exist_ok=True)
+    tbl = _load_tables()
+    rules = load_rules(league)
+    wk_lab = week_labels(tbl["player_week_stats"], tbl["kicking_stats"],
+                         tbl["team_defense_stats"], rules)
+
+    data_seasons = sorted(tbl["player_week_stats"]["season"].unique())
+    target_seasons = list(range(data_seasons[0] + 1, data_seasons[-1] + 1))
+    min_train = max(c.min_train_seasons for c in WEEKLY_CONFIGS.values())
+    eval_pool = [s for s in target_seasons if s >= target_seasons[0] + min_train]
+    seasons = [s for s in (seasons or eval_pool) if s in set(target_seasons)]
+    if not seasons:
+        print("no backtestable weekly seasons in that range"); return
+
+    skill_window = Window.trailing(
+        n_games=WEEKLY_CONFIGS["WR"].feature_window_games, max_seasons_back=2)
+    off_fm = _weekly_offense_matrix(tbl, target_seasons, skill_window)
+
+    metric_rows: list[dict] = []
+    per_row: list[pd.DataFrame] = []
+
+    for pos, config in WEEKLY_CONFIGS.items():
+        top_n = _WEEKLY_TOP_N[pos]
+        if pos in OFFENSE:
+            fm = off_fm[off_fm["position"] == pos] if not off_fm.empty else off_fm
+        else:
+            fm = _weekly_special_matrix(pos, tbl, target_seasons,
+                                        Window.trailing(n_games=config.feature_window_games,
+                                                        max_seasons_back=2))
+        if fm is None or fm.empty:
+            continue
+        assembled = assemble_position(fm, wk_lab, pos, grain="week")
+
+        pts = wk_lab[wk_lab["position"] == pos][["player_id", "season", "week", "week_points"]]
+        base = _weekly_rolling_baselines(pts, config.feature_window_games)
+
+        for s in seasons:
+            _, oof = walk_forward(assembled, config, [s])
+            if oof.empty:
+                continue
+            merged = base[base["season"] == s].merge(
+                oof.rename(columns={"target_season": "season", "pred_mean": "model",
+                                    "pred_p10": "m_p10", "pred_p50": "m_p50", "pred_p90": "m_p90"})
+                   [["player_id", "week", "model", "m_p10", "m_p50", "m_p90"]],
+                on=["player_id", "week"], how="inner",
+            ).reset_index(drop=True)
+            if merged.empty:
+                continue
+
+            for name in ("model", "trailing_mean", "trailing_ewma", "season_to_date", "last_game"):
+                row = _weekly_grade(name, merged, name, top_n, s, pos)
+                if name == "model":
+                    cov = merged.dropna(subset=["m_p10", "m_p90", "week_points"])
+                    if len(cov) >= 10:
+                        inside = ((cov["week_points"] >= cov["m_p10"])
+                                  & (cov["week_points"] <= cov["m_p90"]))
+                        row["coverage_80"] = float(inside.mean())
+                metric_rows.append(row)
+
+            merged["position"] = pos
+            per_row.append(merged)
+
+    if not metric_rows:
+        print("nothing to grade -- weekly matrices came back empty"); return
+
+    metrics = pd.DataFrame(metric_rows)
+    _print_weekly_summary(metrics)
+
+    tag = f"{min(seasons)}-{max(seasons)}" if len(seasons) > 1 else str(seasons[0])
+    mpath = OUT_DIR / f"{league}_weekly_baselines_{tag}.csv"
+    metrics.to_csv(mpath, index=False)
+
+    rows = pd.concat(per_row, ignore_index=True)
+    rows["model_err"] = rows["model"] - rows["week_points"]
+    rows = rows.sort_values(["season", "model_err"],
+                            key=lambda c: c.abs() if c.name == "model_err" else c,
+                            ascending=[True, False])
+    ppath = OUT_DIR / f"{league}_weekly_backtest_{tag}.csv"
+    keep = ["season", "position", "player_id", "week", "week_points", "model",
+            "m_p10", "m_p90", "trailing_ewma", "season_to_date", "model_err"]
+    rows[keep].round(2).to_csv(ppath, index=False)
+    print(f"\nper-season weekly baseline metrics -> {mpath}")
+    print(f"per-player-week model-vs-actual (biggest misses first) -> {ppath}")
+
+
+def _print_weekly_summary(metrics: pd.DataFrame) -> None:
+    piv = (metrics.groupby(["position", "method"])[["spearman", "mae", "topN_hit"]]
+           .mean().reset_index())
+    order = {"model": 0, "trailing_ewma": 1, "trailing_mean": 2, "season_to_date": 3, "last_game": 4}
+    piv = piv.sort_values(["position", "method"], key=lambda c: c.map(order).fillna(9)
+                          if c.name == "method" else c)
+    n_seasons = metrics["season"].nunique()
+    cov = metrics[metrics["method"] == "model"].groupby("position")["coverage_80"].mean() \
+        if "coverage_80" in metrics.columns else None
+
+    print(f"\n{'pos':>4} {'method':>14} {'rho':>7} {'MAE':>7} {'topN':>6}   "
+          f"(mean over {n_seasons} held-out season{'s' if n_seasons != 1 else ''})")
+    print("-" * 52)
+    for pos in ["QB", "RB", "WR", "TE", "K", "DEF"]:
+        sub = piv[piv["position"] == pos]
+        if sub.empty:
+            continue
+        model_rho = sub[sub["method"] == "model"]["spearman"].iloc[0]
+        for r in sub.itertuples():
+            if pd.isna(r.spearman):
+                continue
+            mark = "  <- >= model" if r.method != "model" and r.spearman >= model_rho - 0.01 else ""
+            print(f"{pos:>4} {r.method:>14} {r.spearman:7.3f} {r.mae:7.2f} {r.topN_hit:6.2f}{mark}")
+        if cov is not None and pos in cov and pd.notna(cov[pos]):
+            print(f"{'':>4} {'(p10-p90 cover)':>14} {cov[pos]:7.2f}   target 0.80")
+        print()
+
+
 def _parse_season(spec: str | None) -> list[int] | None:
     if not spec:
         return None
@@ -259,8 +427,13 @@ def main() -> None:
                     help="team count for the historical ADP baseline (default 12)")
     ap.add_argument("--all", action="store_true",
                     help="keep deep-bench players in the per-player CSV (default: draftable range only)")
+    ap.add_argument("--grain", choices=["season", "week"], default="season",
+                    help="season = draft projection vs ADP/ewma; week = start/sit vs rolling averages")
     args = ap.parse_args()
-    run(args.league, _parse_season(args.season), args.adp_teams, args.all)
+    if args.grain == "week":
+        run_weekly(args.league, _parse_season(args.season))
+    else:
+        run(args.league, _parse_season(args.season), args.adp_teams, args.all)
 
 
 if __name__ == "__main__":

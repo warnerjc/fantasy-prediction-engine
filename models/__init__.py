@@ -6,15 +6,17 @@ Predictions are always ``Prediction(mean, p10, p50, p90)`` — v1 fills ``mean``
 and leaves the quantiles ``None``.
 """
 
-from .config import ModelConfig, DEFAULT_CONFIGS
-from .labels import season_labels
+from .config import ModelConfig, DEFAULT_CONFIGS, WEEKLY_CONFIGS
+from .labels import season_labels, week_labels
 from .prediction import Prediction
 from .pipeline import assemble_position, project_position, walk_forward
 
 __all__ = [
     "ModelConfig",
     "DEFAULT_CONFIGS",
+    "WEEKLY_CONFIGS",
     "season_labels",
+    "week_labels",
     "Prediction",
     "assemble_position",
     "project_position",

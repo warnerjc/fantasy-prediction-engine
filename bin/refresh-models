@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 # Retrain models + write projections. e.g.  bin/refresh-models --league sleeper
+#   --grain week   v2 start/sit: weekly walk-forward metrics (no projection CSV)
 cd "$(dirname "$0")/.." || exit 1
 exec .venv/bin/python -m models.build "$@"

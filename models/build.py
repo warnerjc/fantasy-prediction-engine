@@ -19,11 +19,14 @@ from features import (
     defense_feature_matrix,
     kicker_feature_matrix,
     season_feature_matrix,
+    week_defense_matrix,
+    week_feature_matrix,
+    week_kicker_matrix,
 )
 from features.window import Window
 
-from .config import DEFAULT_CONFIGS
-from .labels import season_labels
+from .config import DEFAULT_CONFIGS, WEEKLY_CONFIGS
+from .labels import season_labels, week_labels
 from .leagues import load_rules
 from .pipeline import assemble_position, project_position, walk_forward
 
@@ -55,6 +58,71 @@ def _feature_matrix(position: str, tbl: dict, target_seasons: list[int]) -> pd.D
         if not fm.empty:
             frames.append(fm)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _weekly_offense_matrix(tbl: dict, target_seasons: list[int], window: Window) -> pd.DataFrame:
+    """week_feature_matrix stacked over seasons, all skill positions at once
+    (the trailing window / opportunity shares need every player, so building it
+    per-position would just repeat the work)."""
+    frames = []
+    for s in target_seasons:
+        fm = week_feature_matrix(tbl["player_week_stats"], tbl["snap_counts"],
+                                 tbl["player_ids"], tbl["team_week"], s, window)
+        if not fm.empty:
+            frames.append(fm)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _weekly_special_matrix(pos: str, tbl: dict, target_seasons: list[int], window: Window) -> pd.DataFrame:
+    fn = week_kicker_matrix if pos == "K" else week_defense_matrix
+    src = "kicking_stats" if pos == "K" else "team_defense_stats"
+    frames = [fn(tbl[src], tbl["team_week"], s, window) for s in target_seasons]
+    frames = [f for f in frames if not f.empty]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def run_weekly(league: str) -> None:
+    OUT_DIR.mkdir(exist_ok=True)
+    tbl = _load_tables()
+    rules = load_rules(league)
+    wk_lab = week_labels(tbl["player_week_stats"], tbl["kicking_stats"],
+                         tbl["team_defense_stats"], rules)
+
+    seasons = sorted(tbl["player_week_stats"]["season"].unique())
+    target_seasons = list(range(seasons[0] + 1, seasons[-1] + 1))   # trailing window crosses the boundary
+    eval_seasons = target_seasons                                   # walk_forward skips the under-trained ones
+
+    # skill matrix once, K/DEF windows differ so build them per position
+    skill_window = Window.trailing(
+        n_games=WEEKLY_CONFIGS["WR"].feature_window_games, max_seasons_back=2)
+    off_fm = _weekly_offense_matrix(tbl, target_seasons, skill_window)
+
+    all_metrics = []
+    for pos, config in WEEKLY_CONFIGS.items():
+        if pos in OFFENSE:
+            fm = off_fm[off_fm["position"] == pos] if not off_fm.empty else off_fm
+        else:
+            fm = _weekly_special_matrix(pos, tbl, target_seasons,
+                                        Window.trailing(n_games=config.feature_window_games,
+                                                        max_seasons_back=2))
+        if fm is None or fm.empty:
+            print(f"{pos}: no weekly features, skipping")
+            continue
+        assembled = assemble_position(fm, wk_lab, pos, grain="week")
+        metrics, _ = walk_forward(assembled, config, eval_seasons)
+        if metrics.empty:
+            continue
+        all_metrics.append(metrics)
+        avg = metrics[["spearman", "mae", "coverage_80", "pinball_p50"]].mean()
+        hit = metrics[[c for c in metrics.columns if c.startswith("top")]].mean().mean()
+        print(f"{pos:>4}  seasons={len(metrics)}  rho={avg['spearman']:.3f}  "
+              f"MAE={avg['mae']:.2f}  topN_hit={hit:.2f}  "
+              f"cover80={avg['coverage_80']:.2f}  pinball={avg['pinball_p50']:.2f}")
+
+    if all_metrics:
+        path = OUT_DIR / f"{league}_weekly_walkforward.csv"
+        pd.concat(all_metrics, ignore_index=True).to_csv(path, index=False)
+        print(f"\nper-held-out-season weekly metrics -> {path}")
 
 
 def run(league: str, project_season: int | None) -> None:
@@ -114,8 +182,13 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--league", required=True, choices=["sleeper", "yahoo"])
     ap.add_argument("--project", type=int, default=None, help="season to project (default: latest+1)")
+    ap.add_argument("--grain", choices=["season", "week"], default="season",
+                    help="season = v1 draft projection; week = v2 start/sit walk-forward")
     args = ap.parse_args()
-    run(args.league, args.project)
+    if args.grain == "week":
+        run_weekly(args.league)
+    else:
+        run(args.league, args.project)
 
 
 if __name__ == "__main__":

@@ -42,7 +42,10 @@ class Window:
       as-of season (v1 draft grain).
     - ``kind="trailing"``: the most recent ``n_games`` games *each player actually
       played*, strictly before the as-of point, spanning the season boundary if
-      needed (v2 weekly grain).
+      needed (v2 weekly grain). ``max_seasons_back`` caps how stale those games
+      may be — with ``max_seasons_back=2`` and an as-of season S, only games from
+      S and S-1 count, so a player who last suited up years ago contributes
+      nothing (and doesn't pollute the opponent-allowed aggregation).
 
     ``drop_final_week`` (prior_season only): also drop the last REG week of each
     visible season. That week is played after every fantasy league's championship
@@ -53,6 +56,7 @@ class Window:
     kind: str = "prior_season"
     n_seasons: int = 1
     n_games: int | None = None
+    max_seasons_back: int | None = None
     season_types: tuple[str, ...] = ("REG",)
     drop_final_week: bool = False
 
@@ -96,6 +100,8 @@ def visible_weeks(
             df = df[df["week"] < final]
     else:  # trailing
         df = df[df["week_index"] < as_of.index]
+        if window.max_seasons_back is not None:
+            df = df[df["season"] >= as_of.season - window.max_seasons_back]
         df = df.sort_values([player_col, "week_index"])
         df = df.groupby(player_col, sort=False).tail(window.n_games)
 
